@@ -83,20 +83,22 @@ Flow Command bundle
 - Tauri updater supports Windows (`.msi` / `.nsis`).
 - May need separate signing cert.
 
-## Open Blockers
+## Open Considerations
 
-**Apple Developer Signing/Notarization**
-- Flow Command must be signed + notarized for Gatekeeper (required for macOS distribution).
-- Need Apple Developer account ($99/year).
-- Use `codesign` + `xcrun notarytool` (or Xcode) in build pipeline.
-- Tauri CLI supports signing via `tauri.conf.json` → `bundle.macOS.signing`.
+**Distribution (Internal App Only)**
+- Flow Command is a **proprietary internal app** for Flow Gardens only.
+- **No Apple Developer signing/notarization required** — ad-hoc local builds sufficient for v1.
+- Chase builds locally on Mac; `.app` bundle runs without distribution outside organization.
+- If external distribution needed later, revisit signing requirements.
 
 **Rust Toolchain on Mac**
-- Local builds require **Rust** (not yet installed on Chase's Mac) + Xcode Command Line Tools (✅ present).
-- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Mac has Node 26.x + bun installed.
-- `@tauri-apps/cli` resolves via npx but cannot compile without Rust toolchain.
-- Cloud Linux (this environment) can validate structure but not build `.app` / `.dmg` for macOS.
+- ✅ **Rust now installed** on Chase's Mac (`rustup` under `~/.cargo/bin`)
+- May need `source ~/.cargo/env` in new shells
+- Xcode Command Line Tools: ✅ present
+- Mac has Node 26.x + bun installed
+- Ready for `npm run tauri dev` and local builds
+
+## Remaining Integration Work
 
 **FGINV Integration (Hosted WebView)**
 - **Port conflict**: Dashboard Express (port 3000) and FGINV `next dev` (default 3000) clash.
@@ -116,8 +118,8 @@ Flow Command bundle
 |-----------------------|-------------------------|----------------------------|
 | Window chrome         | `titleBarStyle: Overlay`| Standard or custom         |
 | Keychain              | Keychain Access         | Credential Manager         |
-| Signing               | Apple cert + notarize   | Authenticode cert          |
-| Updater               | `.dmg` / `.app`         | `.msi` / `.exe`            |
+| Distribution          | Ad-hoc local builds (internal app) | TBD if needed       |
+| Updater               | Manual updates or simple auto-updater | TBD            |
 | Webview               | WKWebView (native)      | WebView2 (bundled/system)  |
 
 ## Tech Stack

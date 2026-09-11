@@ -120,35 +120,40 @@ authors = ["Chase Curtis <chase@flowgardens.com>"]
 - [ ] Runtime shell behavior (requires macOS WKWebView)
 - [ ] Dashboard iframe loading (requires Mac dev environment)
 
-### 📝 Ready for Local Mac Testing
-Chase should:
-1. **Install Rust** (not yet on Mac): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-2. Clone repo + install deps (`npm install`)
-3. Run dashboard in separate terminal (quote path if spaces):
+### ✅ Ready for Local Mac Testing — ALL PREREQS MET
+Chase environment:
+- ✅ **Rust installed** (rustup under `~/.cargo/bin`; may need `source ~/.cargo/env`)
+- ✅ Node 26 + bun
+- ✅ Xcode CLT installed
+- Dashboard local tree dirty vs `origin/main` (payments feature + edits) — OK for spike
+
+**Test steps**:
+1. Run dashboard in separate terminal (quote path if spaces):
    ```bash
    cd "/Users/chase/Documents/Dev/Projects/flow gardens dashboard"
    npm run dev
    ```
-4. Run Tauri shell (`npm run tauri dev`)
-5. Verify shell UI loads dashboard in iframe
-6. Test navigation, theme, window behavior
-
-**Environment notes**:
-- Mac has Node 26 + bun (✅ ready)
-- Xcode CLT installed (✅ ready)
-- Rust not yet installed (⚠️ required)
-- Dashboard local tree dirty vs `origin/main` (payments feature + edits) — OK for spike
+2. Run Tauri shell:
+   ```bash
+   cd flow-command
+   npm install
+   npm run tauri dev
+   ```
+3. Verify shell UI loads dashboard in iframe
+4. Test navigation, theme, window behavior
 
 ## Phase 2 Blockers (Documented)
 
-1. **Rust Toolchain on Mac**
-   - Not yet installed on Chase's Mac (Node 26 + bun present)
+1. ✅ **Rust Toolchain on Mac** — COMPLETE
+   - Rust now installed on Chase's Mac (rustup under `~/.cargo/bin`)
    - Xcode Command Line Tools: ✅ installed
-   - Install: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+   - Node 26 + bun: ✅ present
+   - Ready for local builds
 
-2. **Apple Developer Signing/Notarization**
-   - Requires Apple Developer account ($99/year)
-   - Documented in ARCHITECTURE.md
+2. ~~**Apple Developer Signing/Notarization**~~ — NOT NEEDED
+   - Flow Command is an **internal proprietary app** for Flow Gardens only
+   - Ad-hoc local builds sufficient for v1
+   - No external distribution planned
 
 3. **FGINV Integration (Hosted WebView Approach)**
    - **No local FGINV checkout** on Mac (only `fginv-review-artifacts`)
@@ -181,12 +186,12 @@ Chase should:
 
 ## Next Steps
 
-After Chase reviews and tests on Mac:
-1. **Install Rust** (prerequisite for `tauri dev`)
-2. Gather feedback on shell UI/UX
-3. Adjust window size, theme, navigation as needed
+Chase can now test locally (all prerequisites met):
+1. ✅ Rust installed — ready for `tauri dev`
+2. Test shell UI + dashboard integration
+3. Gather feedback on UX/navigation/theme
 4. Plan Phase 2:
    - Production Express sidecar + Keychain integration
    - **FGINV**: Separate WebView → hosted Netlify app (not local sidecar)
-   - Apple signing/notarization
+   - Simple auto-updater or manual update workflow (internal app only)
 5. Consider monorepo structure if merging dashboard repo (FGINV stays hosted)

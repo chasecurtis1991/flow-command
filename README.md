@@ -8,19 +8,14 @@ Phase 1 spike: Tauri shell that loads Flow Gardens Dashboard UI.
 
 ### On macOS (local development)
 
-1. **Rust** (required for Tauri compilation)
-   ```bash
-   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-   source $HOME/.cargo/env
-   ```
-   **Note**: Not yet installed on Chase's Mac; required before first `tauri dev` run.
+1. **Rust** ✅ **Now installed on Mac**
+   - Rustup under `~/.cargo/bin`
+   - May need `source ~/.cargo/env` in new shells
+   - Verify: `cargo --version`
 
-2. **Xcode Command Line Tools** (✅ already present)
-   ```bash
-   xcode-select --install
-   ```
+2. **Xcode Command Line Tools** ✅ **Already present**
 
-3. **Node.js** (✅ Node 26.x installed, bun also available)
+3. **Node.js** ✅ **Node 26.x installed, bun also available**
 
 4. **Flow Gardens Dashboard** (separate repo)
    - Repo: https://github.com/chasecurtis1991/flow-gardens-dashboard
@@ -58,8 +53,6 @@ cd flow-command
 npm run tauri dev
 # Tauri window opens, loads dashboard from localhost:5173
 ```
-
-**First run**: Install Rust before `tauri dev` if not yet installed (see Prerequisites).
 
 ### Option 2: Single command (future)
 ```bash
@@ -106,7 +99,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 
 ## Building for Production
 
-**Note**: This requires macOS with Rust + Xcode installed.
+**Note**: This requires macOS with Rust + Xcode installed (✅ all present on Chase's Mac).
 
 ```bash
 npm run tauri build
@@ -116,10 +109,7 @@ Outputs:
 - `.app` bundle: `src-tauri/target/release/bundle/macos/Flow Command.app`
 - `.dmg` installer: `src-tauri/target/release/bundle/dmg/`
 
-**Not yet configured**:
-- Express sidecar bundling
-- Code signing
-- Notarization
+**Distribution**: Flow Command is an **internal proprietary app**. Ad-hoc local builds are sufficient — no Apple Developer signing/notarization needed for v1 internal use.
 
 ## Configuration
 
@@ -163,8 +153,8 @@ For production, change to `http://localhost:3000` (Express sidecar).
 - Cloud Linux environment can only validate structure, not build `.app`.
 
 ### "Rust not found" or "cargo: command not found"
-- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Restart terminal or run `source $HOME/.cargo/env`
+- ✅ **Rust now installed** on Chase's Mac
+- If new shell: run `source ~/.cargo/env` to add to PATH
 - Verify: `cargo --version`
 
 ### "Port 3000 already in use"
@@ -180,12 +170,11 @@ For production, change to `http://localhost:3000` (Express sidecar).
 
 ## Next Steps (Phase 2)
 
-1. **Install Rust on Mac** (prerequisite for local builds)
+1. ✅ ~~Install Rust on Mac~~ (complete)
 2. Bundle Express as sidecar (`externalBin` in Tauri config)
 3. Integrate macOS Keychain for secrets (no `.env` in bundle)
 4. **FGINV integration**: Separate WebView → hosted Netlify app (https://fginv.netlify.app or custom domain)
-5. Apple Developer signing + notarization
-6. Implement auto-updater (`tauri-plugin-updater`)
+5. Implement simple auto-updater or manual update workflow (internal app)
 
 **FGINV Note**: Phase 2 uses hosted FGINV (Netlify/Vercel) instead of local Next.js sidecar to avoid:
 - Port conflict with dashboard (both default to 3000)
