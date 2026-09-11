@@ -1,6 +1,13 @@
+import { Outlet, NavLink } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
+
+type NavItem = {
+  id: string;
+  path: string;
+  label: string;
+  icon: string;
+};
 
 type StoreInfo = {
   id: string;
@@ -8,15 +15,15 @@ type StoreInfo = {
   domain: string;
 };
 
-const navItems = [
-  { to: "/", label: "Home", end: true },
-  { to: "/orders", label: "Orders" },
-  { to: "/inventory", label: "Inventory" },
-  { to: "/catalog", label: "Catalog" },
-  { to: "/lab", label: "Lab / COAs" },
-  { to: "/customers", label: "Customers" },
-  { to: "/analytics", label: "Analytics" },
-  { to: "/settings", label: "Settings" },
+const navItems: NavItem[] = [
+  { id: "home", path: "/home", label: "Home", icon: "🏠" },
+  { id: "orders", path: "/orders", label: "Orders", icon: "📦" },
+  { id: "inventory", path: "/inventory", label: "Inventory", icon: "📊" },
+  { id: "catalog", path: "/catalog", label: "Catalog", icon: "📚" },
+  { id: "lab", path: "/lab", label: "Lab / COAs", icon: "🧪" },
+  { id: "customers", path: "/customers", label: "Customers", icon: "👥" },
+  { id: "analytics", path: "/analytics", label: "Analytics", icon: "📈" },
+  { id: "settings", path: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
 export function Layout() {
@@ -45,39 +52,18 @@ export function Layout() {
     }
   }
 
+  const activeDomain = stores.find((s) => s.id === activeId)?.domain;
+
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">FC</div>
-          <div>
-            <div className="brand-title">Flow Command</div>
-            <div className="brand-sub">Flow Gardens</div>
-          </div>
-        </div>
-        <nav className="nav">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                isActive ? "nav-item active" : "nav-item"
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
-
-      <div className="main">
-        <header className="topbar">
+      <header className="app-header">
+        <div className="header-left">
+          <h1 className="app-title">Flow Command</h1>
           <select
             className="store-switcher"
             value={activeId}
             onChange={(e) => onStoreChange(e.target.value)}
-            title={stores.find((s) => s.id === activeId)?.domain}
+            title={activeDomain}
           >
             {stores.map((s) => (
               <option key={s.id} value={s.id}>
@@ -85,14 +71,38 @@ export function Layout() {
               </option>
             ))}
           </select>
-          <button className="chrome-btn" type="button" title="Command palette">
-            ⌘K
+        </div>
+        <div className="header-right">
+          <button className="cmd-k-trigger" title="Search (⌘K)" type="button">
+            <span>⌘K</span>
           </button>
-          <button className="chrome-btn" type="button" title="Alerts">
-            🔔
+          <button className="alerts-trigger" title="Alerts" type="button">
+            <span>🔔</span>
           </button>
-        </header>
-        <Outlet />
+        </div>
+      </header>
+
+      <div className="app-body">
+        <aside className="app-sidebar">
+          <nav className="nav-menu">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.id}
+                to={item.path}
+                className={({ isActive }) =>
+                  `nav-item ${isActive ? "active" : ""}`
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span className="nav-label">{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </aside>
+
+        <main className="app-content">
+          <Outlet />
+        </main>
       </div>
     </div>
   );
