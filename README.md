@@ -41,7 +41,23 @@ This starts:
 
 **Hot reload**: Frontend changes reload automatically; Rust changes require restart.
 
-## First-Time Setup
+## Usage
+
+### Orders
+1. **Home** → "Fetch Shop Info" verifies connection
+2. Navigate to **Orders**
+3. Recent orders load automatically (50 most recent)
+4. Click any order row → detail panel shows line items, customer, totals
+5. Switch store via header dropdown → orders auto-refresh
+6. Click "Refresh" to reload manually
+
+Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
+
+### Settings
+Store Shopify credentials in Keychain:
+1. **Settings** → enter client ID & secret
+2. Click **Save to Keychain**
+3. Credentials persist across app launches
 
 1. Launch Flow Command: `npm run tauri dev`
 2. Navigate to **Settings** page
@@ -90,21 +106,26 @@ flow-command/
 - ✅ Global chrome (store switcher, ⌘K stub, alerts stub)
 - ✅ **Shopify integration**:
   - Client credentials OAuth flow
-  - Keychain credential storage
-  - GraphQL Admin API queries
+  - Token caching (23-hour expiry, reused across commands)
+  - GraphQL Admin API queries (API version 2026-01)
+  - Active store management
+- ✅ **Orders page**:
+  - List recent orders (50 most recent)
+  - Click order → view detail with line items
+  - Respects active store (auto-refreshes on store switch)
+  - Loading & error states
 - ✅ Settings page (Keychain management)
 - ✅ Home page (connection test)
-- ✅ Page stubs for Orders, Inventory, Catalog, Lab, Customers, Analytics
+- ✅ Page stubs for Inventory, Catalog, Lab, Customers, Analytics
 
 ### Future (Phase 2+)
 
-- [ ] Full order management (CRUD)
+- [ ] Orders: Filters, search, actions (refund, fulfill, etc.)
 - [ ] Product/inventory sync
 - [ ] Customer lookups
 - [ ] Analytics dashboards
 - [ ] FGINV features (built in-app, not iframe)
-- [ ] Multi-store aggregation
-- [ ] Token caching (Shopify access tokens ~24h)
+- [ ] Multi-store data aggregation
 
 ## Tauri Commands (Rust API)
 
@@ -129,30 +150,38 @@ const info = await invoke<any>("fetch_shop_info");
 **Backend commands** (see `src-tauri/src/lib.rs`):
 
 - `ping()` — health check
+- `get_active_store()` / `set_active_store(store)` — active store management
 - `save_shopify_credentials(client_id, client_secret)` — store to Keychain
-- `get_shopify_credentials()` — read from Keychain
-- `fetch_shopify_token(shop_domain)` — Shopify client credentials OAuth
+- `fetch_shopify_token(shop_domain)` — Shopify client credentials OAuth (legacy, token caching used internally)
 - `fetch_shop_info()` — demo GraphQL query (shop name)
+- `list_orders(first?)` — list recent orders for active store (default 25, up to 100)
+- `get_order(order_id)` — fetch single order detail with line items (uses Shopify GID)
 
 ## Configuration
 
-### Shopify Stores (hardcoded Phase 1)
+### Shopify Stores (real domains)
 
 ```rust
-// Default stores (src-tauri/src/lib.rs)
-- Retail: flowgardensaz.myshopify.com
-- B2B: flowgardensb2b.myshopify.com
-- Bulk: flowgardensbulk.myshopify.com
+// Store domains (src-tauri/src/lib.rs)
+- retail → 3wvfyr-1i.myshopify.com
+- b2b → b8h8vg-ij.myshopify.com
+- bulk → fg-craft-flower.myshopify.com
 ```
 
-**Phase 2**: Make store domains editable in Settings.
+Active store is managed via header dropdown. Switch stores → Orders page auto-refreshes.
+
+**API version**: `2026-01` (matches dashboard)
 
 ### Secrets Storage
 
-**macOS Keychain** via `keyring` crate:
+**Secrets Storage**
 
-- Service: `"Flow Command"`
+**macOS Keychain** via `keyring` crate with `apple-native` feature:
+
+- Service: `"com.flowgardens.command"`
 - Accounts: `shopify_client_id`, `shopify_client_secret`
+
+**Token caching**: Access tokens cached per shop domain with 23-hour expiry. Reused across commands to minimize auth requests.
 
 **Never commit secrets** — `.gitignore` blocks `.env` files.
 
