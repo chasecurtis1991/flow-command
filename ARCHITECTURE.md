@@ -1,156 +1,236 @@
 # Flow Command Architecture
 
-Minimal, Mac-first Tauri 2 desktop shell for Flow Gardens tools.
+All-in-one internal Mac desktop app for Flow Gardens company operations.
+
+## Product Vision
+
+Flow Command is a **native Tauri desktop application** that provides Flow Gardens with a unified interface for managing operations across multiple stores (Retail, B2B, Bulk). It directly integrates with Shopify Admin API and other services via Rust backend commands.
+
+**Not a wrapper** — Flow Command is a standalone app with its own React UI and Rust backend, not an iframe shell around the old dashboard.
 
 ## Process Model
 
-**Current (Phase 1 — Dashboard Wrap)**
 ```
-Flow Command (Tauri main process)
-  └─ WebView (React shell at localhost:1420)
-       └─ iframe → Flow Gardens Dashboard (localhost:5173)
-            ├─ Vite dev server (port 5173)
-            └─ Express API (port 3000)
-```
-
-- **Tauri main**: native macOS window, menu, system tray.
-- **Shell UI**: React app (this repo) renders chrome + sidebar + iframe.
-- **Dashboard**: Vite + Express from `flow-gardens-dashboard` repo (run separately in dev).
-- **Dev workflow**: Two processes — `npm run tauri dev` (shell) + `npm run dev` (dashboard).
-
-**Production Path (Documented, Not Yet Implemented)**
-```
-Flow Command bundle
-  ├─ Tauri main
-  ├─ Shell UI (static assets in bundle)
-  └─ Express sidecar (external bin spawned at runtime)
+Flow Command (single Tauri process)
+  ├─ Tauri main process (Rust)
+  │   ├─ Shopify Admin API integration
+  │   ├─ macOS Keychain for secrets
+  │   └─ Future: other service integrations
+  └─ WebView (React + TypeScript + Vite)
+      └─ Client-side routing (react-router-dom)
 ```
 
-- Use Tauri `externalBin` or shell spawn to launch Express API.
-- Serve dashboard static build (`dist/`) via Express at runtime.
-- Shell iframe points to `http://localhost:3000` (Express).
+**All-in-one architecture:**
+- **Frontend**: React 19 + TypeScript + Vite, dark-first UI (iOS Settings + Grok Bot aesthetic)
+- **Backend**: Tauri commands in Rust call external APIs directly (Shopify, future integrations)
+- **No Express sidecar**, no iframe, no external dashboard dependency
+- **macOS Keychain** stores Shopify credentials securely
 
-**Phase 2 (FGINV — Separate WebView to Hosted App)**
-```
-Flow Command bundle
-  ├─ Tauri main
-  ├─ Shell UI
-  ├─ Express sidecar (Dashboard API, port 3000)
-  └─ FGINV WebView → https://fginv.netlify.app (or custom domain)
-```
+## Navigation Structure
 
-- **FGINV** is Next.js 16 + Supabase from [`fginv` repo](https://github.com/chasecurtis1991/fginv).
-- **Deployment**: FGINV is hosted on Netlify (or Vercel) with Supabase cloud DB.
-- **Integration**: Shell sidebar "Inventory → FGINV" opens a **separate Tauri WebView** (not iframe) pointing to the hosted URL.
-- **Why not sidecar?**
-  - Port conflict: Dashboard Express uses port 3000; FGINV `next dev` also defaults to 3000.
-  - No local FGINV checkout on Mac (only review artifacts).
-  - FGINV has Supabase dependency; simpler to point at hosted app than bundle Next.js standalone + Supabase local.
-- **Future option**: If offline mode needed, explore local Docker Supabase + Next.js sidecar on port 3001.
+**Sidebar Pages:**
+- **Home**: System status, Shopify connection test, quick stats
+- **Orders**: Order management across stores (coming soon)
+- **Inventory**: 
+  - Shopify tab: Product/variant inventory
+  - FGINV tab: Internal inventory features (future in-app implementation)
+- **Catalog**: Product catalog management
+- **Lab / COAs**: Certificate of Analysis tracking
+- **Customers**: Customer relationship management
+- **Analytics**: Sales and operational metrics
+- **Settings**: Shopify credentials (Keychain), store configuration
+
+**Global Chrome:**
+- Store switcher: Flow Gardens (Retail) | Flow Gardens B2B | Flow Gardens Bulk
+- ⌘K: Search (stub)
+- 🔔: Alerts (stub)
+
+## Shopify Integration
+
+### Authentication Flow
+
+Flow Command uses **Shopify client credentials OAuth** (24-hour token lifetime):
+
+1. User enters Shopify client ID & secret in Settings → saved to macOS Keychain
+2. On API call, Rust command:
+   - Reads credentials from Keychain
+   - POST to `https://{shop}.myshopify.com/admin/oauth/access_token`
+   - Params: `client_id`, `client_secret`, `grant_type=client_credentials`
+   - Receives `access_token` (~24h validity)
+3. Use token for GraphQL/REST Admin API calls
+4. Handle token expiry: retry auth flow on 401
+
+### Shopify Admin API
+
+**GraphQL endpoint**: `https://{shop}.myshopify.com/admin/api/2024-01/graphql.json`
+
+**Stores (hardcoded for Phase 1):**
+- Retail: `flowgardensaz.myshopify.com`
+- B2B: `flowgardensb2b.myshopify.com`
+- Bulk: `flowgardensbulk.myshopify.com`
+
+**Phase 2**: Store domains configurable in Settings, multi-store queries.
+
+### Reference Implementation
+
+The old **flow-gardens-dashboard** (Vite/React + Express) is a **behavior reference**, not code to copy wholesale. Flow Command reimplements features as Tauri commands + React pages:
+
+- Dashboard: Express proxy → Shopify API
+- Flow Command: Rust commands → Shopify API directly
+
+**Feature parity over time**, not a port.
 
 ## Secrets Management
 
-**Never bundle secrets in the app.**
+**macOS Keychain** via [`keyring` crate](https://crates.io/crates/keyring):
 
-**Current (Phase 1 Dev)**
-- **Dashboard** uses `.env` (dotenv on disk) — NOT copied into Flow Command.
-- **FGINV** uses DB token encryption (`TOKEN_ENCRYPTION_KEY`) + Netlify environment variables.
-- Dev workflow: secrets live in respective repos only; Flow Command has no secrets in Phase 1.
+```rust
+// Save credentials
+keyring::Entry::new("Flow Command", "shopify_client_id")?
+    .set_password(&client_id)?;
 
-**Production (Mac)**
-- Store secrets in **macOS Keychain** via Tauri plugin: [`tauri-plugin-keyring`](https://github.com/tauri-apps/tauri-plugin-keyring).
-- On first launch, prompt for:
-  - Shopify Client ID / Secret
-  - Shop domains
-  - OpenRouter API key
-  - Google Service Account JSON
-- Write to Keychain, read at runtime, pass to sidecar Express/Next.js via env vars.
+// Read credentials
+let client_id = keyring::Entry::new("Flow Command", "shopify_client_id")?
+    .get_password()?;
+```
 
-**Windows Later**
-- Use Windows Credential Manager (same Tauri plugin supports it).
+**Credential storage:**
+- Service: `"Flow Command"`
+- Accounts: `shopify_client_id`, `shopify_client_secret`
 
-**Pattern**: Reuse Hemp Dashboard credential flow. Flow Command fetches from Keychain → spawns sidecar with env vars injected.
+**Never bundle `.env` files** — all secrets go through Keychain.
 
-## Update Strategy
+**Linux/CI**: Keychain calls may fail on non-macOS. Feature-gate with `#[cfg(target_os = "macos")]` and return stub errors on other platforms. Phase 1 is Mac-only.
 
-**macOS**
-- Use [`tauri-plugin-updater`](https://v2.tauri.app/plugin/updater/) (official Tauri 2 plugin).
-- Host update manifests + signed `.dmg` bundles (S3 / GitHub Releases / Vercel Blob).
-- In-app "Check for Updates" in Settings.
-- Consider Sparkle integration if Tauri updater is insufficient.
+## Tauri Commands (Rust ↔ React)
 
-**Windows Later**
-- Tauri updater supports Windows (`.msi` / `.nsis`).
-- May need separate signing cert.
+**Current (Phase 1):**
 
-## Open Considerations
+- `ping()` → health check, returns `"Flow Command is running ✓"`
+- `save_shopify_credentials(client_id, client_secret)` → save to Keychain
+- `get_shopify_credentials()` → read from Keychain
+- `fetch_shopify_token(shop_domain)` → client credentials OAuth
+- `fetch_shop_info()` → demo GraphQL query (shop name)
 
-**Distribution (Internal App Only)**
-- Flow Command is a **proprietary internal app** for Flow Gardens only.
-- **No Apple Developer signing/notarization required** — ad-hoc local builds sufficient for v1.
-- Chase builds locally on Mac; `.app` bundle runs without distribution outside organization.
-- If external distribution needed later, revisit signing requirements.
+**Future (Phase 2+):**
 
-**Rust Toolchain on Mac**
-- ✅ **Rust now installed** on Chase's Mac (`rustup` under `~/.cargo/bin`)
-- May need `source ~/.cargo/env` in new shells
-- Xcode Command Line Tools: ✅ present
-- Mac has Node 26.x + bun installed
-- Ready for `npm run tauri dev` and local builds
-
-## Remaining Integration Work
-
-**FGINV Integration (Hosted WebView)**
-- **Port conflict**: Dashboard Express (port 3000) and FGINV `next dev` (default 3000) clash.
-- **No local FGINV checkout**: Only `fginv-review-artifacts` (audit/tree + 807MB zip) on Mac.
-- **Phase 2 approach**: Point separate Tauri WebView at hosted FGINV (Netlify/Vercel) instead of local sidecar.
-- **Live repo**: https://github.com/chasecurtis1991/fginv
-- **Future option**: If offline mode needed, run FGINV on port 3001 + local Docker Supabase (complex; defer).
-
-**Sidecar Binary Paths**
-- Tauri `externalBin` expects specific OS-dependent paths.
-- Bundle `node` + `express/next` server scripts, or require Node.js installed on user machine.
-- Recommend bundling Node binary (e.g., via `pkg` or `nexe`) to avoid dependency on system Node.
-
-## Platform Differences
-
-| Feature               | macOS (Phase 1)         | Windows (Later)            |
-|-----------------------|-------------------------|----------------------------|
-| Window chrome         | `titleBarStyle: Overlay`| Standard or custom         |
-| Keychain              | Keychain Access         | Credential Manager         |
-| Distribution          | Ad-hoc local builds (internal app) | TBD if needed       |
-| Updater               | Manual updates or simple auto-updater | TBD            |
-| Webview               | WKWebView (native)      | WebView2 (bundled/system)  |
-
-## Tech Stack
-
-- **Shell**: Tauri 2 (Rust) + React 19 + TypeScript + Vite
-- **Dashboard**: Vite + Express (React 19, no TypeScript in original)
-- **FGINV**: Next.js 16 + Supabase + TypeScript
-- **Styling**: Vanilla CSS (dark theme, iOS Settings aesthetic)
+- Order queries (recent, search, filters)
+- Product/inventory queries
+- Customer lookups
+- Analytics aggregations
+- FGINV internal features (not iframe — native UI + backend)
 
 ## Development Workflow
 
-**Prerequisites:**
-- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (not yet on Mac)
-- Dashboard repo cloned (local path may have spaces; quote carefully in scripts)
+**Single repo, single process:**
 
-**Run Phase 1:**
-1. Terminal 1: `cd "/Users/chase/Documents/Dev/Projects/flow gardens dashboard" && npm run dev`
-   - Vite dev server: port 5173
-   - Express API: port 3000
-2. Terminal 2: `cd flow-command && npm run tauri dev` (Tauri shell → iframe to 5173)
-3. Edit shell UI in `flow-command/src/`; hot reload via Vite.
-4. Dashboard changes hot reload independently.
+```bash
+cd flow-command
+npm install
+npm run tauri dev
+```
 
-**Note**: Dashboard local tree is dirty vs `origin/main` (payments feature + edits). Spike references the **GitHub repo pattern**, not a specific checkout state.
+Tauri runs Vite dev server (localhost:1420) + Rust backend together.
 
-## Future: Monorepo?
+**Hot reload**: Frontend changes reload via Vite; Rust changes require restart.
 
-Option: Merge `flow-gardens-dashboard` + `fginv` into this repo as workspace packages.
-- Keep separate `package.json` for each.
-- Use `npm workspaces` or `pnpm` workspace.
-- Benefit: single repo, unified build.
-- Trade-off: larger repo, more complex CI.
+**No separate dashboard process** — Flow Command is self-contained.
 
-**Recommendation**: Keep separate for Phase 1 spike; evaluate monorepo after FGINV embed is stable.
+## Configuration
+
+**Shopify Credentials (Phase 1 setup):**
+
+1. Launch Flow Command: `npm run tauri dev`
+2. Navigate to Settings
+3. Enter Shopify client ID & secret → Save to Keychain
+4. Return to Home → click "Fetch Shop Info" to test
+
+**Store domains** hardcoded for Phase 1 (`flowgardensaz.myshopify.com`). Phase 2: editable in Settings.
+
+## Tech Stack
+
+- **Frontend**: React 19 + TypeScript + Vite + react-router-dom
+- **Backend**: Tauri 2 (Rust)
+- **HTTP client**: `reqwest` (async)
+- **Secrets**: `keyring` crate (macOS Keychain)
+- **Styling**: Vanilla CSS (dark theme)
+
+**No Express, no iframe, no sidecar.**
+
+## Platform Support
+
+### macOS (Phase 1)
+- Primary target
+- Native WKWebView
+- Keychain for secrets
+- Ad-hoc local builds (no signing needed — internal app)
+
+### Windows (Future)
+- Tauri supports WebView2
+- Windows Credential Manager (via `keyring` crate)
+- Adjust window chrome (`titleBarStyle` not supported)
+
+### Linux
+- Not planned (internal app, Mac-first)
+
+## Distribution
+
+**Internal proprietary app** for Flow Gardens only.
+
+**No Apple Developer signing/notarization required** — ad-hoc local builds sufficient.
+
+**Build process:**
+```bash
+npm run tauri build
+```
+
+Output: `.app` bundle in `src-tauri/target/release/bundle/macos/`
+
+**Updates**: Manual (drag new `.app` to Applications). Phase 2: consider `tauri-plugin-updater` if frequent updates needed.
+
+## Differences from Old Dashboard
+
+| Aspect | Old Dashboard | Flow Command |
+|--------|---------------|--------------|
+| **Architecture** | Vite frontend + Express API proxy | Tauri all-in-one (React + Rust) |
+| **Deployment** | Two processes (Vite dev + Express) | Single process (Tauri) |
+| **API calls** | Express middleware → Shopify | Rust commands → Shopify |
+| **Secrets** | `.env` files (dotenv) | macOS Keychain |
+| **Distribution** | Web app (dev server) | Native desktop app (`.app`) |
+| **FGINV** | Separate hosted Next.js app | Future in-app features (Phase 2) |
+
+## FGINV Future (Phase 2)
+
+**Not an iframe to hosted Netlify** — FGINV features will be built **directly into Flow Command** as:
+
+- New Inventory sub-pages (beyond Shopify tab)
+- Rust commands for internal inventory logic
+- Potentially separate backend service if complex, but accessed via Tauri commands
+
+No external Next.js app, no Supabase hosted dependency inside Flow Command.
+
+## Open Items (Phase 2+)
+
+1. **Store configuration**: Editable domains for Retail/B2B/Bulk
+2. **Token caching**: Cache Shopify access tokens (~24h lifetime) to avoid repeated auth
+3. **Error handling**: User-friendly error messages for Keychain/API failures
+4. **Multi-store queries**: Aggregate data across stores
+5. **Orders UI**: Full CRUD for Shopify orders
+6. **Inventory sync**: Real-time or polling for stock levels
+7. **FGINV integration**: Native in-app inventory management features
+8. **Analytics**: Charts/graphs (consider charting library)
+9. **Auto-updater**: `tauri-plugin-updater` if frequent releases
+
+## Security
+
+- **Keychain** for secrets (never commit `.env` with real credentials)
+- **CSP**: Tauri security config (no `dangerousRemoteDomainIpcAccess` — removed)
+- **API keys**: Shopify client credentials only; no public exposure
+
+## References
+
+- **Old dashboard repo** (behavior reference): https://github.com/chasecurtis1991/flow-gardens-dashboard
+- **FGINV repo** (separate app, not embedded): https://github.com/chasecurtis1991/fginv
+- **Shopify Admin API**: https://shopify.dev/docs/api/admin
+- **Tauri docs**: https://v2.tauri.app/
+- **keyring crate**: https://docs.rs/keyring/latest/keyring/
