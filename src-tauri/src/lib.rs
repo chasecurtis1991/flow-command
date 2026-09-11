@@ -1,7 +1,14 @@
 use serde::{Deserialize, Serialize};
 use keyring::Entry;
 
+const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
+const KEY_CLIENT_ID: &str = "shopify_client_id";
+const KEY_CLIENT_SECRET: &str = "shopify_client_secret";
+// Default retail shop for the spike — Settings will make this configurable later.
+const DEFAULT_SHOP_DOMAIN: &str = "flow-gardens-retail.myshopify.com";
+
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ShopifyCredentials {
     client_id: String,
     client_secret: String,
@@ -10,54 +17,68 @@ struct ShopifyCredentials {
 #[derive(Debug, Serialize, Deserialize)]
 struct TokenResponse {
     access_token: String,
+    #[serde(default)]
     scope: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ShopInfo {
     shop_name: Option<String>,
     products_count: Option<i32>,
     status: String,
+    shop_domain: String,
 }
 
-// Health check command
+fn keychain_entry(account: &str) -> Result<Entry, String> {
+    Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain error: {e}"))
+}
+
 #[tauri::command]
 fn ping() -> String {
     "Flow Command is running ✓".to_string()
 }
 
-// Save Shopify credentials to macOS Keychain
 #[tauri::command]
 fn save_shopify_credentials(client_id: String, client_secret: String) -> Result<String, String> {
-    let entry_id = Entry::new("Flow Command", "shopify_client_id")
-        .map_err(|e| format!("Keychain error: {}", e))?;
-    let entry_secret = Entry::new("Flow Command", "shopify_client_secret")
-        .map_err(|e| format!("Keychain error: {}", e))?;
+    let client_id = client_id.trim().to_string();
+    let client_secret = client_secret.trim().to_string();
+    if client_id.is_empty() || client_secret.is_empty() {
+        return Err("Client ID and secret are required".to_string());
+    }
 
-    entry_id
+    keychain_entry(KEY_CLIENT_ID)?
         .set_password(&client_id)
-        .map_err(|e| format!("Failed to save client_id: {}", e))?;
-    entry_secret
+        .map_err(|e| format!("Failed to save client_id: {e}"))?;
+    keychain_entry(KEY_CLIENT_SECRET)?
         .set_password(&client_secret)
-        .map_err(|e| format!("Failed to save client_secret: {}", e))?;
+        .map_err(|e| format!("Failed to save client_secret: {e}"))?;
 
-    Ok("Credentials saved successfully".to_string())
+    // Verify immediately so a mock/no-op store can't report false success.
+    let saved = get_shopify_credentials()?;
+    if saved.client_id != client_id {
+        return Err("Keychain write did not stick — check apple-native keyring feature".to_string());
+    }
+
+    Ok("Credentials saved and verified in Keychain".to_string())
 }
 
-// Get Shopify credentials from macOS Keychain
 #[tauri::command]
 fn get_shopify_credentials() -> Result<ShopifyCredentials, String> {
-    let entry_id = Entry::new("Flow Command", "shopify_client_id")
-        .map_err(|e| format!("Keychain error: {}", e))?;
-    let entry_secret = Entry::new("Flow Command", "shopify_client_secret")
-        .map_err(|e| format!("Keychain error: {}", e))?;
-
-    let client_id = entry_id
+    let client_id = keychain_entry(KEY_CLIENT_ID)?
         .get_password()
-        .map_err(|e| format!("Client ID not found in Keychain: {}", e))?;
-    let client_secret = entry_secret
+        .map_err(|e| {
+            format!(
+                "Client ID not found in Keychain ({e}). Open Settings and Save to Keychain again."
+            )
+        })?;
+    let client_secret = keychain_entry(KEY_CLIENT_SECRET)?
         .get_password()
-        .map_err(|e| format!("Client secret not found in Keychain: {}", e))?;
+        .map_err(|e| {
+            format!(
+                "Client secret not found in Keychain ({e}). Open Settings and Save to Keychain again."
+            )
+        })?;
 
     Ok(ShopifyCredentials {
         client_id,
@@ -65,13 +86,11 @@ fn get_shopify_credentials() -> Result<ShopifyCredentials, String> {
     })
 }
 
-// Fetch Shopify access token using client credentials flow
 #[tauri::command]
 async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
     let creds = get_shopify_credentials()?;
-
     let client = reqwest::Client::new();
-    let token_url = format!("https://{}/admin/oauth/access_token", shop_domain);
+    let token_url = format!("https://{shop_domain}/admin/oauth/access_token");
 
     let params = [
         ("client_id", creds.client_id.as_str()),
@@ -84,7 +103,7 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
         .form(&params)
         .send()
         .await
-        .map_err(|e| format!("Token request failed: {}", e))?;
+        .map_err(|e| format!("Token request failed: {e}"))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -92,44 +111,34 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read response".to_string());
-        return Err(format!("Token request failed with status {}: {}", status, body));
+        return Err(format!("Token request failed with status {status}: {body}"));
     }
 
     let token_data: TokenResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+        .map_err(|e| format!("Failed to parse token response: {e}"))?;
 
     Ok(token_data.access_token)
 }
 
-// Fetch shop info from Shopify GraphQL API
 #[tauri::command]
 async fn fetch_shop_info() -> Result<ShopInfo, String> {
-    // Default to retail store for demo
-    let shop_domain = "flowgardensaz.myshopify.com";
-    let token = fetch_shopify_token(shop_domain.to_string()).await?;
+    let shop_domain = DEFAULT_SHOP_DOMAIN.to_string();
+    let token = fetch_shopify_token(shop_domain.clone()).await?;
 
     let client = reqwest::Client::new();
-    let graphql_url = format!("https://{}/admin/api/2024-01/graphql.json", shop_domain);
+    let graphql_url = format!("https://{shop_domain}/admin/api/2026-01/graphql.json");
 
-    // Simple GraphQL query to get shop name and product count
     let query = r#"
         {
             shop {
                 name
             }
-            products(first: 1) {
-                pageInfo {
-                    hasNextPage
-                }
-            }
         }
     "#;
 
-    let body = serde_json::json!({
-        "query": query
-    });
+    let body = serde_json::json!({ "query": query });
 
     let response = client
         .post(&graphql_url)
@@ -138,7 +147,7 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("GraphQL request failed: {}", e))?;
+        .map_err(|e| format!("GraphQL request failed: {e}"))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -146,13 +155,17 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read response".to_string());
-        return Err(format!("GraphQL request failed with status {}: {}", status, body));
+        return Err(format!("GraphQL request failed with status {status}: {body}"));
     }
 
     let result: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse GraphQL response: {}", e))?;
+        .map_err(|e| format!("Failed to parse GraphQL response: {e}"))?;
+
+    if let Some(errors) = result.get("errors") {
+        return Err(format!("GraphQL errors: {errors}"));
+    }
 
     let shop_name = result["data"]["shop"]["name"]
         .as_str()
@@ -160,8 +173,9 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
 
     Ok(ShopInfo {
         shop_name,
-        products_count: None, // Could calculate from pagination
+        products_count: None,
         status: "Connected ✓".to_string(),
+        shop_domain,
     })
 }
 

@@ -5,18 +5,25 @@ export function Settings() {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
+  const [saving, setSaving] = useState(false);
 
   async function saveCredentials() {
+    setSaving(true);
+    setSaveStatus("");
     try {
-      await invoke("save_shopify_credentials", {
-        clientId,
-        clientSecret,
+      const message = await invoke<string>("save_shopify_credentials", {
+        clientId: clientId.trim(),
+        clientSecret: clientSecret.trim(),
       });
-      setSaveStatus("✅ Credentials saved to Keychain");
+      // Round-trip read so the UI reflects real Keychain state
+      await invoke("get_shopify_credentials");
+      setSaveStatus(`✅ ${message}`);
       setClientId("");
       setClientSecret("");
     } catch (error) {
-      setSaveStatus(`❌ Error: ${error}`);
+      setSaveStatus(`❌ ${String(error)}`);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -31,7 +38,8 @@ export function Settings() {
         <div className="card">
           <h3>Shopify Credentials</h3>
           <p className="card-text">
-            Store Shopify client ID and secret securely in macOS Keychain.
+            Store the Hemp Dashboard / Shopify managed-app client ID and secret
+            in macOS Keychain (service <code>com.flowgardens.command</code>).
           </p>
 
           <div className="form-group">
@@ -42,6 +50,7 @@ export function Settings() {
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               placeholder="Your Shopify client ID"
+              autoComplete="off"
             />
           </div>
 
@@ -53,26 +62,26 @@ export function Settings() {
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               placeholder="Your Shopify client secret"
+              autoComplete="off"
             />
           </div>
 
           <button
             className="btn btn-primary"
             onClick={saveCredentials}
-            disabled={!clientId || !clientSecret}
+            disabled={saving || !clientId.trim() || !clientSecret.trim()}
           >
-            Save to Keychain
+            {saving ? "Saving…" : "Save to Keychain"}
           </button>
 
-          {saveStatus && (
-            <div className="status-message">{saveStatus}</div>
-          )}
+          {saveStatus && <div className="status-message">{saveStatus}</div>}
         </div>
 
         <div className="card">
           <h3>Store Configuration</h3>
           <p className="card-text">
-            Configure store domains and other settings. Coming soon.
+            Spike default shop: <code>flow-gardens-retail.myshopify.com</code>.
+            Multi-store picker coming next.
           </p>
         </div>
       </div>
