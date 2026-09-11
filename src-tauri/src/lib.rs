@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use keyring::Entry;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
+use std::collections::HashMap;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
 const KEY_CLIENT_ID: &str = "shopify_client_id";
@@ -10,6 +13,22 @@ const KEY_ACTIVE_SHOP: &str = "shopify_active_shop";
 const SHOP_RETAIL: &str = "3wvfyr-1i.myshopify.com";
 const SHOP_B2B: &str = "b8h8vg-ij.myshopify.com";
 const SHOP_BULK: &str = "fg-craft-flower.myshopify.com";
+
+// Token cache
+struct TokenCache {
+    tokens: HashMap<String, CachedToken>,
+}
+
+struct CachedToken {
+    token: String,
+    expires_at: SystemTime,
+}
+
+lazy_static::lazy_static! {
+    static ref TOKEN_CACHE: Mutex<TokenCache> = Mutex::new(TokenCache {
+        tokens: HashMap::new(),
+    });
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +61,43 @@ struct ShopInfo {
     shop_domain: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Order {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub display_financial_status: Option<String>,
+    pub display_fulfillment_status: Option<String>,
+    pub total_price: String,
+    pub customer_name: Option<String>,
+    pub customer_email: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderDetail {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub display_financial_status: Option<String>,
+    pub display_fulfillment_status: Option<String>,
+    pub total_price: String,
+    pub subtotal_price: String,
+    pub total_tax: String,
+    pub customer_name: Option<String>,
+    pub customer_email: Option<String>,
+    pub line_items: Vec<LineItem>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LineItem {
+    pub title: String,
+    pub sku: Option<String>,
+    pub quantity: i32,
+    pub price: String,
+}
+
 fn keychain_entry(account: &str) -> Result<Entry, String> {
     Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain error: {e}"))
 }
@@ -65,7 +121,6 @@ fn known_stores() -> Vec<StoreInfo> {
         },
     ]
 }
-
 
 #[tauri::command]
 fn ping() -> String {
@@ -147,8 +202,39 @@ fn get_shopify_credentials() -> Result<ShopifyCredentials, String> {
     })
 }
 
-#[tauri::command]
-async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
+// Get cached token or fetch new one
+async fn get_cached_token(shop_domain: &str) -> Result<String, String> {
+    // Check cache first
+    {
+        let cache = TOKEN_CACHE.lock().unwrap();
+        if let Some(cached) = cache.tokens.get(shop_domain) {
+            if SystemTime::now() < cached.expires_at {
+                return Ok(cached.token.clone());
+            }
+        }
+    }
+
+    // Fetch new token
+    let token = fetch_new_token(shop_domain).await?;
+    
+    // Cache it (23 hours expiry)
+    let expires_at = SystemTime::now() + Duration::from_secs(23 * 3600);
+    {
+        let mut cache = TOKEN_CACHE.lock().unwrap();
+        cache.tokens.insert(
+            shop_domain.to_string(),
+            CachedToken {
+                token: token.clone(),
+                expires_at,
+            },
+        );
+    }
+
+    Ok(token)
+}
+
+// Fetch new token from Shopify
+async fn fetch_new_token(shop_domain: &str) -> Result<String, String> {
     let creds = get_shopify_credentials()?;
     let client = reqwest::Client::new();
     let token_url = format!("https://{shop_domain}/admin/oauth/access_token");
@@ -172,39 +258,33 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read response".to_string());
-        return Err(format!(
-            "Token request failed for {shop_domain} with status {status}: {body}"
-        ));
+        let truncated = if body.len() > 200 {
+            format!("{}...", &body[..200])
+        } else {
+            body
+        };
+        return Err(format!("Token failed ({}): {}", status, truncated));
     }
 
     let token_data: TokenResponse = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse token response: {e}"))?;
+        .map_err(|e| format!("Failed to parse token: {e}"))?;
 
     Ok(token_data.access_token)
 }
 
+// Legacy public command (for Settings test)
 #[tauri::command]
-async fn fetch_shop_info() -> Result<ShopInfo, String> {
-    let active = get_active_store().unwrap_or(StoreInfo {
-        id: "retail".into(),
-        label: "Retail".into(),
-        domain: SHOP_RETAIL.into(),
-    });
-    let shop_domain = active.domain;
-    let token = fetch_shopify_token(shop_domain.clone()).await?;
+async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
+    fetch_new_token(&shop_domain).await
+}
 
+// GraphQL helper
+async fn graphql_query(shop_domain: &str, query: &str) -> Result<serde_json::Value, String> {
+    let token = get_cached_token(shop_domain).await?;
     let client = reqwest::Client::new();
-    let graphql_url = format!("https://{shop_domain}/admin/api/2026-01/graphql.json");
-
-    let query = r#"
-        {
-            shop {
-                name
-            }
-        }
-    "#;
+    let graphql_url = format!("https://{}/admin/api/2026-01/graphql.json", shop_domain);
 
     let body = serde_json::json!({ "query": query });
 
@@ -215,7 +295,7 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("GraphQL request failed: {e}"))?;
+        .map_err(|e| format!("GraphQL request failed: {}", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -223,17 +303,50 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read response".to_string());
-        return Err(format!("GraphQL request failed with status {status}: {body}"));
+        let truncated = if body.len() > 200 {
+            format!("{}...", &body[..200])
+        } else {
+            body
+        };
+        return Err(format!("GraphQL failed ({}): {}", status, truncated));
     }
 
     let result: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse GraphQL response: {e}"))?;
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
 
     if let Some(errors) = result.get("errors") {
-        return Err(format!("GraphQL errors: {errors}"));
+        let err_str = errors.to_string();
+        let truncated = if err_str.len() > 200 {
+            format!("{}...", &err_str[..200])
+        } else {
+            err_str
+        };
+        return Err(format!("GraphQL errors: {}", truncated));
     }
+
+    Ok(result)
+}
+
+#[tauri::command]
+async fn fetch_shop_info() -> Result<ShopInfo, String> {
+    let active = get_active_store().unwrap_or(StoreInfo {
+        id: "retail".into(),
+        label: "Retail".into(),
+        domain: SHOP_RETAIL.into(),
+    });
+    let shop_domain = active.domain;
+
+    let query = r#"
+        {
+            shop {
+                name
+            }
+        }
+    "#;
+
+    let result = graphql_query(&shop_domain, query).await?;
 
     let shop_name = result["data"]["shop"]["name"]
         .as_str()
@@ -244,6 +357,208 @@ async fn fetch_shop_info() -> Result<ShopInfo, String> {
         products_count: None,
         status: "Connected ✓".to_string(),
         shop_domain,
+    })
+}
+
+// List orders for active store
+#[tauri::command]
+async fn list_orders(first: Option<i32>) -> Result<Vec<Order>, String> {
+    let active = get_active_store()?;
+    let shop_domain = active.domain;
+    let count = first.unwrap_or(25).min(100);
+
+    let query = format!(
+        r#"
+        {{
+            orders(first: {}, sortKey: CREATED_AT, reverse: true) {{
+                edges {{
+                    node {{
+                        id
+                        name
+                        createdAt
+                        displayFinancialStatus
+                        displayFulfillmentStatus
+                        totalPriceSet {{
+                            shopMoney {{
+                                amount
+                                currencyCode
+                            }}
+                        }}
+                        customer {{
+                            displayName
+                            email
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        count
+    );
+
+    let result = graphql_query(&shop_domain, &query).await?;
+
+    let orders: Vec<Order> = result["data"]["orders"]["edges"]
+        .as_array()
+        .ok_or("Invalid orders response")?
+        .iter()
+        .filter_map(|edge| {
+            let node = &edge["node"];
+            Some(Order {
+                id: node["id"].as_str()?.to_string(),
+                name: node["name"].as_str()?.to_string(),
+                created_at: node["createdAt"].as_str()?.to_string(),
+                display_financial_status: node["displayFinancialStatus"]
+                    .as_str()
+                    .map(|s| s.to_string()),
+                display_fulfillment_status: node["displayFulfillmentStatus"]
+                    .as_str()
+                    .map(|s| s.to_string()),
+                total_price: format!(
+                    "{} {}",
+                    node["totalPriceSet"]["shopMoney"]["amount"].as_str()?,
+                    node["totalPriceSet"]["shopMoney"]["currencyCode"].as_str()?
+                ),
+                customer_name: node["customer"]["displayName"]
+                    .as_str()
+                    .map(|s| s.to_string()),
+                customer_email: node["customer"]["email"].as_str().map(|s| s.to_string()),
+            })
+        })
+        .collect();
+
+    Ok(orders)
+}
+
+// Get single order with line items (using GID)
+#[tauri::command]
+async fn get_order(order_id: String) -> Result<OrderDetail, String> {
+    let active = get_active_store()?;
+    let shop_domain = active.domain;
+
+    let query = format!(
+        r#"
+        {{
+            order(id: "{}") {{
+                id
+                name
+                createdAt
+                displayFinancialStatus
+                displayFulfillmentStatus
+                totalPriceSet {{
+                    shopMoney {{
+                        amount
+                        currencyCode
+                    }}
+                }}
+                subtotalPriceSet {{
+                    shopMoney {{
+                        amount
+                        currencyCode
+                    }}
+                }}
+                totalTaxSet {{
+                    shopMoney {{
+                        amount
+                        currencyCode
+                    }}
+                }}
+                customer {{
+                    displayName
+                    email
+                }}
+                lineItems(first: 100) {{
+                    edges {{
+                        node {{
+                            title
+                            sku
+                            quantity
+                            originalUnitPriceSet {{
+                                shopMoney {{
+                                    amount
+                                    currencyCode
+                                }}
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        "#,
+        order_id
+    );
+
+    let result = graphql_query(&shop_domain, &query).await?;
+
+    let order = &result["data"]["order"];
+    if order.is_null() {
+        return Err("Order not found".to_string());
+    }
+
+    let line_items: Vec<LineItem> = order["lineItems"]["edges"]
+        .as_array()
+        .ok_or("Invalid line items response")?
+        .iter()
+        .filter_map(|edge| {
+            let node = &edge["node"];
+            Some(LineItem {
+                title: node["title"].as_str()?.to_string(),
+                sku: node["sku"].as_str().map(|s| s.to_string()),
+                quantity: node["quantity"].as_i64()? as i32,
+                price: format!(
+                    "{} {}",
+                    node["originalUnitPriceSet"]["shopMoney"]["amount"].as_str()?,
+                    node["originalUnitPriceSet"]["shopMoney"]["currencyCode"].as_str()?
+                ),
+            })
+        })
+        .collect();
+
+    Ok(OrderDetail {
+        id: order["id"].as_str().ok_or("Missing id")?.to_string(),
+        name: order["name"].as_str().ok_or("Missing name")?.to_string(),
+        created_at: order["createdAt"]
+            .as_str()
+            .ok_or("Missing createdAt")?
+            .to_string(),
+        display_financial_status: order["displayFinancialStatus"]
+            .as_str()
+            .map(|s| s.to_string()),
+        display_fulfillment_status: order["displayFulfillmentStatus"]
+            .as_str()
+            .map(|s| s.to_string()),
+        total_price: format!(
+            "{} {}",
+            order["totalPriceSet"]["shopMoney"]["amount"]
+                .as_str()
+                .ok_or("Missing total")?,
+            order["totalPriceSet"]["shopMoney"]["currencyCode"]
+                .as_str()
+                .ok_or("Missing currency")?
+        ),
+        subtotal_price: format!(
+            "{} {}",
+            order["subtotalPriceSet"]["shopMoney"]["amount"]
+                .as_str()
+                .ok_or("Missing subtotal")?,
+            order["subtotalPriceSet"]["shopMoney"]["currencyCode"]
+                .as_str()
+                .ok_or("Missing currency")?
+        ),
+        total_tax: format!(
+            "{} {}",
+            order["totalTaxSet"]["shopMoney"]["amount"]
+                .as_str()
+                .ok_or("Missing tax")?,
+            order["totalTaxSet"]["shopMoney"]["currencyCode"]
+                .as_str()
+                .ok_or("Missing currency")?
+        ),
+        customer_name: order["customer"]["displayName"]
+            .as_str()
+            .map(|s| s.to_string()),
+        customer_email: order["customer"]["email"].as_str().map(|s| s.to_string()),
+        line_items,
     })
 }
 
@@ -259,7 +574,9 @@ pub fn run() {
             save_shopify_credentials,
             get_shopify_credentials,
             fetch_shopify_token,
-            fetch_shop_info
+            fetch_shop_info,
+            list_orders,
+            get_order
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
