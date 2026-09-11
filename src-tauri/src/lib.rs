@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use keyring::Entry;
-use std::sync::Mutex;
-use std::time::{Duration, SystemTime};
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
 const KEY_CLIENT_ID: &str = "shopify_client_id";
@@ -24,10 +24,11 @@ struct CachedToken {
     expires_at: SystemTime,
 }
 
-lazy_static::lazy_static! {
-    static ref TOKEN_CACHE: Mutex<TokenCache> = Mutex::new(TokenCache {
+fn token_cache() -> &'static Mutex<TokenCache> {
+    static CACHE: OnceLock<Mutex<TokenCache>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(TokenCache {
         tokens: HashMap::new(),
-    });
+    }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -206,7 +207,7 @@ fn get_shopify_credentials() -> Result<ShopifyCredentials, String> {
 async fn get_cached_token(shop_domain: &str) -> Result<String, String> {
     // Check cache first
     {
-        let cache = TOKEN_CACHE.lock().unwrap();
+        let cache = token_cache().lock().unwrap();
         if let Some(cached) = cache.tokens.get(shop_domain) {
             if SystemTime::now() < cached.expires_at {
                 return Ok(cached.token.clone());
@@ -220,7 +221,7 @@ async fn get_cached_token(shop_domain: &str) -> Result<String, String> {
     // Cache it (23 hours expiry)
     let expires_at = SystemTime::now() + Duration::from_secs(23 * 3600);
     {
-        let mut cache = TOKEN_CACHE.lock().unwrap();
+        let mut cache = token_cache().lock().unwrap();
         cache.tokens.insert(
             shop_domain.to_string(),
             CachedToken {
