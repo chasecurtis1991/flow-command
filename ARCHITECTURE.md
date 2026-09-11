@@ -30,27 +30,32 @@ Flow Command bundle
 - Serve dashboard static build (`dist/`) via Express at runtime.
 - Shell iframe points to `http://localhost:3000` (Express).
 
-**Phase 2 (FGINV — Next.js Embed)**
+**Phase 2 (FGINV — Separate WebView to Hosted App)**
 ```
 Flow Command bundle
   ├─ Tauri main
   ├─ Shell UI
-  ├─ Express sidecar (Dashboard API)
-  └─ Next.js standalone server (FGINV at localhost:3001)
+  ├─ Express sidecar (Dashboard API, port 3000)
+  └─ FGINV WebView → https://fginv.netlify.app (or custom domain)
 ```
 
-- FGINV is Next.js 16 + Supabase from `fginv` repo.
-- Next.js standalone build → sidecar process on separate port.
-- Shell sidebar "Inventory → FGINV" tab switches iframe to `localhost:3001`.
-- Coordinate lifecycle: spawn Express + Next.js on app start; terminate on quit.
+- **FGINV** is Next.js 16 + Supabase from [`fginv` repo](https://github.com/chasecurtis1991/fginv).
+- **Deployment**: FGINV is hosted on Netlify (or Vercel) with Supabase cloud DB.
+- **Integration**: Shell sidebar "Inventory → FGINV" opens a **separate Tauri WebView** (not iframe) pointing to the hosted URL.
+- **Why not sidecar?**
+  - Port conflict: Dashboard Express uses port 3000; FGINV `next dev` also defaults to 3000.
+  - No local FGINV checkout on Mac (only review artifacts).
+  - FGINV has Supabase dependency; simpler to point at hosted app than bundle Next.js standalone + Supabase local.
+- **Future option**: If offline mode needed, explore local Docker Supabase + Next.js sidecar on port 3001.
 
 ## Secrets Management
 
 **Never bundle secrets in the app.**
 
 **Current (Phase 1 Dev)**
-- Dashboard repo uses `.env` (dotenv) — NOT copied into Flow Command.
-- Dev workflow: secrets live in `flow-gardens-dashboard/.env` only.
+- **Dashboard** uses `.env` (dotenv on disk) — NOT copied into Flow Command.
+- **FGINV** uses DB token encryption (`TOKEN_ENCRYPTION_KEY`) + Netlify environment variables.
+- Dev workflow: secrets live in respective repos only; Flow Command has no secrets in Phase 1.
 
 **Production (Mac)**
 - Store secrets in **macOS Keychain** via Tauri plugin: [`tauri-plugin-keyring`](https://github.com/tauri-apps/tauri-plugin-keyring).
@@ -87,16 +92,18 @@ Flow Command bundle
 - Tauri CLI supports signing via `tauri.conf.json` → `bundle.macOS.signing`.
 
 **Rust Toolchain on Mac**
-- Local builds require Rust + Xcode Command Line Tools.
-- Install: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Xcode CLT: `xcode-select --install`
+- Local builds require **Rust** (not yet installed on Chase's Mac) + Xcode Command Line Tools (✅ present).
+- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- Mac has Node 26.x + bun installed.
+- `@tauri-apps/cli` resolves via npx but cannot compile without Rust toolchain.
 - Cloud Linux (this environment) can validate structure but not build `.app` / `.dmg` for macOS.
 
-**FGINV Embed (Next.js Standalone)**
-- Next.js `standalone` output must be tested as sidecar.
-- Coordinate ports (3000 dashboard, 3001 FGINV).
-- Ensure Supabase client works in sidecar context (not bundled in Tauri webview).
-- Consider Next.js static export if standalone sidecar is complex; trade-off: lose API routes.
+**FGINV Integration (Hosted WebView)**
+- **Port conflict**: Dashboard Express (port 3000) and FGINV `next dev` (default 3000) clash.
+- **No local FGINV checkout**: Only `fginv-review-artifacts` (audit/tree + 807MB zip) on Mac.
+- **Phase 2 approach**: Point separate Tauri WebView at hosted FGINV (Netlify/Vercel) instead of local sidecar.
+- **Live repo**: https://github.com/chasecurtis1991/fginv
+- **Future option**: If offline mode needed, run FGINV on port 3001 + local Docker Supabase (complex; defer).
 
 **Sidecar Binary Paths**
 - Tauri `externalBin` expects specific OS-dependent paths.
@@ -122,10 +129,19 @@ Flow Command bundle
 
 ## Development Workflow
 
-1. Terminal 1: `cd flow-gardens-dashboard && npm run dev` (ports 3000 + 5173)
+**Prerequisites:**
+- Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` (not yet on Mac)
+- Dashboard repo cloned (local path may have spaces; quote carefully in scripts)
+
+**Run Phase 1:**
+1. Terminal 1: `cd "/Users/chase/Documents/Dev/Projects/flow gardens dashboard" && npm run dev`
+   - Vite dev server: port 5173
+   - Express API: port 3000
 2. Terminal 2: `cd flow-command && npm run tauri dev` (Tauri shell → iframe to 5173)
 3. Edit shell UI in `flow-command/src/`; hot reload via Vite.
 4. Dashboard changes hot reload independently.
+
+**Note**: Dashboard local tree is dirty vs `origin/main` (payments feature + edits). Spike references the **GitHub repo pattern**, not a specific checkout state.
 
 ## Future: Monorepo?
 

@@ -122,30 +122,44 @@ authors = ["Chase Curtis <chase@flowgardens.com>"]
 
 ### 📝 Ready for Local Mac Testing
 Chase should:
-1. Install Rust + Xcode CLT (see README.md)
+1. **Install Rust** (not yet on Mac): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 2. Clone repo + install deps (`npm install`)
-3. Run dashboard in separate terminal (`cd ../flow-gardens-dashboard && npm run dev`)
+3. Run dashboard in separate terminal (quote path if spaces):
+   ```bash
+   cd "/Users/chase/Documents/Dev/Projects/flow gardens dashboard"
+   npm run dev
+   ```
 4. Run Tauri shell (`npm run tauri dev`)
 5. Verify shell UI loads dashboard in iframe
 6. Test navigation, theme, window behavior
 
+**Environment notes**:
+- Mac has Node 26 + bun (✅ ready)
+- Xcode CLT installed (✅ ready)
+- Rust not yet installed (⚠️ required)
+- Dashboard local tree dirty vs `origin/main` (payments feature + edits) — OK for spike
+
 ## Phase 2 Blockers (Documented)
 
-1. **Apple Developer Signing/Notarization**
+1. **Rust Toolchain on Mac**
+   - Not yet installed on Chase's Mac (Node 26 + bun present)
+   - Xcode Command Line Tools: ✅ installed
+   - Install: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+2. **Apple Developer Signing/Notarization**
    - Requires Apple Developer account ($99/year)
    - Documented in ARCHITECTURE.md
 
-2. **Rust Toolchain on Mac**
-   - Local builds require Rust + Xcode
-   - Install commands in README.md
-
-3. **FGINV Embed (Next.js Standalone)**
-   - Need to test Next.js as sidecar
-   - Port coordination (3000 dashboard, 3001 FGINV)
+3. **FGINV Integration (Hosted WebView Approach)**
+   - **No local FGINV checkout** on Mac (only `fginv-review-artifacts`)
+   - **Port conflict**: Dashboard (3000) and FGINV (3000) clash
+   - **Phase 2 approach**: Separate Tauri WebView → hosted Netlify app
+   - Live repo: https://github.com/chasecurtis1991/fginv
+   - Avoids Supabase local setup complexity
    - Documented in ARCHITECTURE.md + sidecar-production.md
 
 4. **Sidecar Binary Paths**
-   - Tauri `externalBin` configuration
+   - Tauri `externalBin` configuration for Express
    - Bundle Node + Express server scripts
    - Detailed in docs/sidecar-production.md
 
@@ -168,7 +182,11 @@ Chase should:
 ## Next Steps
 
 After Chase reviews and tests on Mac:
-1. Gather feedback on shell UI/UX
-2. Adjust window size, theme, navigation as needed
-3. Plan Phase 2: production sidecar + Keychain + FGINV embed
-4. Consider monorepo structure if merging dashboard + FGINV repos
+1. **Install Rust** (prerequisite for `tauri dev`)
+2. Gather feedback on shell UI/UX
+3. Adjust window size, theme, navigation as needed
+4. Plan Phase 2:
+   - Production Express sidecar + Keychain integration
+   - **FGINV**: Separate WebView → hosted Netlify app (not local sidecar)
+   - Apple signing/notarization
+5. Consider monorepo structure if merging dashboard repo (FGINV stays hosted)

@@ -8,24 +8,26 @@ Phase 1 spike: Tauri shell that loads Flow Gardens Dashboard UI.
 
 ### On macOS (local development)
 
-1. **Rust** (required for Tauri)
+1. **Rust** (required for Tauri compilation)
    ```bash
    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
    source $HOME/.cargo/env
    ```
+   **Note**: Not yet installed on Chase's Mac; required before first `tauri dev` run.
 
-2. **Xcode Command Line Tools**
+2. **Xcode Command Line Tools** (✅ already present)
    ```bash
    xcode-select --install
    ```
 
-3. **Node.js** (v18+)
-   - Install via [nvm](https://github.com/nvm-sh/nvm) or [nodejs.org](https://nodejs.org)
+3. **Node.js** (✅ Node 26.x installed, bun also available)
 
 4. **Flow Gardens Dashboard** (separate repo)
-   - Clone `flow-gardens-dashboard` repo alongside this one.
-   - Install deps: `cd flow-gardens-dashboard && npm install`
+   - Repo: https://github.com/chasecurtis1991/flow-gardens-dashboard
+   - Local path may contain spaces (e.g., `"/Users/chase/Documents/Dev/Projects/flow gardens dashboard"`)
+   - Install deps: `npm install` in dashboard directory
    - Create `.env` with your secrets (Shopify, OpenRouter, etc.)
+   - **Note**: Local tree may be dirty vs `origin/main` (payments feature, etc.)
 
 ## Installation
 
@@ -44,7 +46,8 @@ npm install
 
 **Terminal 1 — Dashboard (Vite + Express)**
 ```bash
-cd ../flow-gardens-dashboard
+# If path has spaces, quote it:
+cd "/Users/chase/Documents/Dev/Projects/flow gardens dashboard"
 npm run dev
 # Dashboard at http://localhost:5173, API at http://localhost:3000
 ```
@@ -55,6 +58,8 @@ cd flow-command
 npm run tauri dev
 # Tauri window opens, loads dashboard from localhost:5173
 ```
+
+**First run**: Install Rust before `tauri dev` if not yet installed (see Prerequisites).
 
 ### Option 2: Single command (future)
 ```bash
@@ -90,10 +95,12 @@ flow-command/
 
 - [ ] Production sidecar (bundled Express server)
 - [ ] macOS Keychain integration for secrets
-- [ ] FGINV (Next.js) embed
+- [ ] FGINV integration (Phase 2: separate WebView to hosted Netlify app, not local sidecar)
 - [ ] Apple signing/notarization
 - [ ] Auto-updater
 - [ ] Windows support
+
+**Note**: Phase 2 FGINV will use a **hosted deployment** (Netlify/Vercel) accessed via separate Tauri WebView, not a local Next.js sidecar. This avoids port conflicts (dashboard uses 3000, FGINV defaults to 3000) and Supabase local setup complexity.
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for details.
 
@@ -147,16 +154,22 @@ For production, change to `http://localhost:3000` (Express sidecar).
 ## Troubleshooting
 
 ### "Dashboard not loading"
-- Ensure `flow-gardens-dashboard` is running on port 5173.
-- Check browser console in DevTools (right-click Tauri window → Inspect).
+- Ensure dashboard is running: `npm run dev` in dashboard directory (port 5173)
+- If path has spaces, quote it: `cd "/path/to/flow gardens dashboard"`
+- Check browser console in DevTools (right-click Tauri window → Inspect)
 
 ### "Tauri build fails on Linux"
 - This is expected — Tauri macOS builds require macOS.
 - Cloud Linux environment can only validate structure, not build `.app`.
 
-### "Rust not found"
+### "Rust not found" or "cargo: command not found"
 - Install Rust: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- Restart terminal or run `source $HOME/.cargo/env`.
+- Restart terminal or run `source $HOME/.cargo/env`
+- Verify: `cargo --version`
+
+### "Port 3000 already in use"
+- Dashboard Express API uses port 3000.
+- Stop other processes on port 3000: `lsof -ti:3000 | xargs kill`
 
 ## Development Tips
 
@@ -167,11 +180,17 @@ For production, change to `http://localhost:3000` (Express sidecar).
 
 ## Next Steps (Phase 2)
 
-1. Bundle Express as sidecar (`externalBin` in Tauri config)
-2. Integrate macOS Keychain for secrets (no `.env` in bundle)
-3. Embed FGINV (Next.js standalone on port 3001)
-4. Apple Developer signing + notarization
-5. Implement auto-updater (`tauri-plugin-updater`)
+1. **Install Rust on Mac** (prerequisite for local builds)
+2. Bundle Express as sidecar (`externalBin` in Tauri config)
+3. Integrate macOS Keychain for secrets (no `.env` in bundle)
+4. **FGINV integration**: Separate WebView → hosted Netlify app (https://fginv.netlify.app or custom domain)
+5. Apple Developer signing + notarization
+6. Implement auto-updater (`tauri-plugin-updater`)
+
+**FGINV Note**: Phase 2 uses hosted FGINV (Netlify/Vercel) instead of local Next.js sidecar to avoid:
+- Port conflict with dashboard (both default to 3000)
+- Supabase local setup complexity
+- No local FGINV checkout needed
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for full roadmap.
 

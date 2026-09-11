@@ -173,10 +173,11 @@ fn spawn_dashboard_with_secrets(app_handle: &tauri::AppHandle) {
 | Service      | Port | Notes                          |
 |--------------|------|--------------------------------|
 | Dashboard    | 3000 | Express (static + API)         |
-| FGINV (Phase 2) | 3001 | Next.js standalone server   |
-| Shell UI     | 1420 | Vite dev (dev mode only)       |
+| FGINV (hosted) | N/A | https://fginv.netlify.app (separate WebView) |
+| FGINV (local, future) | 3001 | Next.js standalone (if offline mode needed) |
+| Shell UI (dev) | 1420 | Vite dev (dev mode only)     |
 
-In production, shell iframe points to `http://localhost:3000`.
+**Port conflict note**: Dashboard Express and FGINV `next dev` both default to port 3000. Phase 2 avoids this by using hosted FGINV instead of local sidecar.
 
 ## Testing Sidecar Locally
 
@@ -231,14 +232,52 @@ fn quit_app(app_handle: AppHandle, state: tauri::State<AppState>) {
 }
 ```
 
-## Future: FGINV Sidecar (Phase 2)
+## Future: FGINV Integration (Phase 2)
 
-Same pattern, but for Next.js standalone server:
+**Different approach from dashboard sidecar**: FGINV will use a **hosted deployment** accessed via separate Tauri WebView, not a local sidecar.
 
-1. Build FGINV with `next build` → standalone output
-2. Bundle `fginv/.next/standalone/` as sidecar
-3. Spawn: `node fginv/.next/standalone/server.js` on port 3001
-4. Shell sidebar "Inventory → FGINV" switches iframe to `localhost:3001`
+### Why Hosted Instead of Sidecar?
+
+1. **Port conflict**: Dashboard Express uses port 3000; FGINV `next dev` defaults to 3000.
+2. **No local checkout**: Only `fginv-review-artifacts` (audit/tree + zip) on Mac, no working copy.
+3. **Supabase dependency**: FGINV uses Supabase cloud DB; simpler to point at hosted app than bundle local Supabase (Docker) + Next.js standalone.
+4. **Always online**: v1 audience (Chase) always has internet; offline mode not required initially.
+
+### Implementation
+
+**Tauri WebView (not iframe)**:
+```rust
+use tauri::WebviewUrl;
+
+fn open_fginv_view(app_handle: &tauri::AppHandle) {
+    tauri::WebviewWindowBuilder::new(
+        app_handle,
+        "fginv",
+        WebviewUrl::External("https://fginv.netlify.app".parse().unwrap())
+    )
+    .title("FGINV — Flow Gardens Inventory")
+    .inner_size(1400.0, 900.0)
+    .build()
+    .expect("failed to create FGINV window");
+}
+```
+
+**Shell sidebar "Inventory → FGINV" tab**:
+- Invoke Tauri command to open FGINV WebView
+- Separate window or tab (user preference)
+- Hosted URL: `https://fginv.netlify.app` (or custom domain)
+
+**Secrets**: FGINV already uses Netlify environment variables + DB token encryption (`TOKEN_ENCRYPTION_KEY`). No Keychain integration needed for FGINV itself.
+
+### Future: Offline Mode (if needed)
+
+If offline inventory management becomes required:
+1. Run FGINV locally on **port 3001** (avoid dashboard's 3000)
+2. Local Docker Supabase instance
+3. Next.js standalone sidecar (similar to dashboard pattern)
+4. Bundle as `externalBin` with port override: `PORT=3001 node fginv/server.js`
+
+**Complexity**: High. Defer until user need is clear.
 
 ## Recommended Tools
 
