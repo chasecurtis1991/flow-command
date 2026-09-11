@@ -4,14 +4,26 @@ use keyring::Entry;
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
 const KEY_CLIENT_ID: &str = "shopify_client_id";
 const KEY_CLIENT_SECRET: &str = "shopify_client_secret";
-// Default retail shop for the spike — Settings will make this configurable later.
-const DEFAULT_SHOP_DOMAIN: &str = "flow-gardens-retail.myshopify.com";
+const KEY_ACTIVE_SHOP: &str = "shopify_active_shop";
+
+/// Real Plus store myshopify domains (not the vanity names in some docs).
+const SHOP_RETAIL: &str = "3wvfyr-1i.myshopify.com";
+const SHOP_B2B: &str = "b8h8vg-ij.myshopify.com";
+const SHOP_BULK: &str = "fg-craft-flower.myshopify.com";
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ShopifyCredentials {
     client_id: String,
     client_secret: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoreInfo {
+    id: String,
+    label: String,
+    domain: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,9 +46,59 @@ fn keychain_entry(account: &str) -> Result<Entry, String> {
     Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain error: {e}"))
 }
 
+fn known_stores() -> Vec<StoreInfo> {
+    vec![
+        StoreInfo {
+            id: "retail".into(),
+            label: "Retail".into(),
+            domain: SHOP_RETAIL.into(),
+        },
+        StoreInfo {
+            id: "b2b".into(),
+            label: "B2B / Wholesale".into(),
+            domain: SHOP_B2B.into(),
+        },
+        StoreInfo {
+            id: "bulk".into(),
+            label: "Bulk / Craft Flower".into(),
+            domain: SHOP_BULK.into(),
+        },
+    ]
+}
+
+
 #[tauri::command]
 fn ping() -> String {
     "Flow Command is running ✓".to_string()
+}
+
+#[tauri::command]
+fn list_stores() -> Vec<StoreInfo> {
+    known_stores()
+}
+
+#[tauri::command]
+fn get_active_store() -> Result<StoreInfo, String> {
+    let stores = known_stores();
+    let id = keychain_entry(KEY_ACTIVE_SHOP)
+        .and_then(|e| e.get_password().map_err(|err| err.to_string()))
+        .unwrap_or_else(|_| "retail".to_string());
+    stores
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| "Active store not found".to_string())
+}
+
+#[tauri::command]
+fn set_active_store(store_id: String) -> Result<StoreInfo, String> {
+    let store = known_stores()
+        .into_iter()
+        .find(|s| s.id == store_id)
+        .ok_or_else(|| format!("Unknown store id: {store_id}"))?;
+    keychain_entry(KEY_ACTIVE_SHOP)?
+        .set_password(&store.id)
+        .map_err(|e| format!("Failed to save active store: {e}"))?;
+    Ok(store)
 }
 
 #[tauri::command]
@@ -54,7 +116,6 @@ fn save_shopify_credentials(client_id: String, client_secret: String) -> Result<
         .set_password(&client_secret)
         .map_err(|e| format!("Failed to save client_secret: {e}"))?;
 
-    // Verify immediately so a mock/no-op store can't report false success.
     let saved = get_shopify_credentials()?;
     if saved.client_id != client_id {
         return Err("Keychain write did not stick — check apple-native keyring feature".to_string());
@@ -111,7 +172,9 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
             .text()
             .await
             .unwrap_or_else(|_| "Unable to read response".to_string());
-        return Err(format!("Token request failed with status {status}: {body}"));
+        return Err(format!(
+            "Token request failed for {shop_domain} with status {status}: {body}"
+        ));
     }
 
     let token_data: TokenResponse = response
@@ -124,7 +187,12 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
 
 #[tauri::command]
 async fn fetch_shop_info() -> Result<ShopInfo, String> {
-    let shop_domain = DEFAULT_SHOP_DOMAIN.to_string();
+    let active = get_active_store().unwrap_or(StoreInfo {
+        id: "retail".into(),
+        label: "Retail".into(),
+        domain: SHOP_RETAIL.into(),
+    });
+    let shop_domain = active.domain;
     let token = fetch_shopify_token(shop_domain.clone()).await?;
 
     let client = reqwest::Client::new();
@@ -185,6 +253,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             ping,
+            list_stores,
+            get_active_store,
+            set_active_store,
             save_shopify_credentials,
             get_shopify_credentials,
             fetch_shopify_token,

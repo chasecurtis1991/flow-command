@@ -1,11 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+
+type StoreInfo = {
+  id: string;
+  label: string;
+  domain: string;
+};
 
 export function Settings() {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
   const [saving, setSaving] = useState(false);
+  const [stores, setStores] = useState<StoreInfo[]>([]);
+
+  useEffect(() => {
+    invoke<StoreInfo[]>("list_stores")
+      .then(setStores)
+      .catch(console.error);
+  }, []);
 
   async function saveCredentials() {
     setSaving(true);
@@ -15,7 +28,6 @@ export function Settings() {
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim(),
       });
-      // Round-trip read so the UI reflects real Keychain state
       await invoke("get_shopify_credentials");
       setSaveStatus(`✅ ${message}`);
       setClientId("");
@@ -78,11 +90,19 @@ export function Settings() {
         </div>
 
         <div className="card">
-          <h3>Store Configuration</h3>
+          <h3>Store Domains</h3>
           <p className="card-text">
-            Spike default shop: <code>flow-gardens-retail.myshopify.com</code>.
-            Multi-store picker coming next.
+            Real <code>.myshopify.com</code> domains used for Admin API calls.
+            Switch stores from the header dropdown.
           </p>
+          <ul className="store-list">
+            {stores.map((s) => (
+              <li key={s.id}>
+                <strong>{s.label}</strong>
+                <code>{s.domain}</code>
+              </li>
+            ))}
+          </ul>
         </div>
       </div>
     </div>

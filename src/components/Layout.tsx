@@ -1,76 +1,98 @@
-import { Outlet, NavLink } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet } from "react-router-dom";
+import { invoke } from "@tauri-apps/api/core";
 
-type NavItem = {
+type StoreInfo = {
   id: string;
-  path: string;
   label: string;
-  icon: string;
+  domain: string;
 };
 
-const navItems: NavItem[] = [
-  { id: "home", path: "/home", label: "Home", icon: "🏠" },
-  { id: "orders", path: "/orders", label: "Orders", icon: "📦" },
-  { id: "inventory", path: "/inventory", label: "Inventory", icon: "📊" },
-  { id: "catalog", path: "/catalog", label: "Catalog", icon: "📚" },
-  { id: "lab", path: "/lab", label: "Lab / COAs", icon: "🧪" },
-  { id: "customers", path: "/customers", label: "Customers", icon: "👥" },
-  { id: "analytics", path: "/analytics", label: "Analytics", icon: "📈" },
-  { id: "settings", path: "/settings", label: "Settings", icon: "⚙️" },
+const navItems = [
+  { to: "/", label: "Home", end: true },
+  { to: "/orders", label: "Orders" },
+  { to: "/inventory", label: "Inventory" },
+  { to: "/catalog", label: "Catalog" },
+  { to: "/lab", label: "Lab / COAs" },
+  { to: "/customers", label: "Customers" },
+  { to: "/analytics", label: "Analytics" },
+  { to: "/settings", label: "Settings" },
 ];
 
 export function Layout() {
-  const [currentStore, setCurrentStore] = useState("retail");
+  const [stores, setStores] = useState<StoreInfo[]>([]);
+  const [activeId, setActiveId] = useState("retail");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const list = await invoke<StoreInfo[]>("list_stores");
+        setStores(list);
+        const active = await invoke<StoreInfo>("get_active_store");
+        setActiveId(active.id);
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  }, []);
+
+  async function onStoreChange(id: string) {
+    setActiveId(id);
+    try {
+      await invoke("set_active_store", { storeId: id });
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   return (
     <div className="app-shell">
-      {/* Global Chrome */}
-      <header className="app-header">
-        <div className="header-left">
-          <h1 className="app-title">Flow Command</h1>
-          <select 
-            className="store-switcher" 
-            value={currentStore}
-            onChange={(e) => setCurrentStore(e.target.value)}
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">FC</div>
+          <div>
+            <div className="brand-title">Flow Command</div>
+            <div className="brand-sub">Flow Gardens</div>
+          </div>
+        </div>
+        <nav className="nav">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                isActive ? "nav-item active" : "nav-item"
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="main">
+        <header className="topbar">
+          <select
+            className="store-switcher"
+            value={activeId}
+            onChange={(e) => onStoreChange(e.target.value)}
+            title={stores.find((s) => s.id === activeId)?.domain}
           >
-            <option value="retail">Flow Gardens (Retail)</option>
-            <option value="b2b">Flow Gardens B2B</option>
-            <option value="bulk">Flow Gardens Bulk</option>
-          </select>
-        </div>
-        <div className="header-right">
-          <button className="cmd-k-trigger" title="Search (⌘K)">
-            <span>⌘K</span>
-          </button>
-          <button className="alerts-trigger" title="Alerts">
-            <span>🔔</span>
-          </button>
-        </div>
-      </header>
-
-      <div className="app-body">
-        {/* Sidebar Navigation */}
-        <aside className="app-sidebar">
-          <nav className="nav-menu">
-            {navItems.map((item) => (
-              <NavLink
-                key={item.id}
-                to={item.path}
-                className={({ isActive }) => 
-                  `nav-item ${isActive ? "active" : ""}`
-                }
-              >
-                <span className="nav-icon">{item.icon}</span>
-                <span className="nav-label">{item.label}</span>
-              </NavLink>
+            {stores.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
             ))}
-          </nav>
-        </aside>
-
-        {/* Main Content Area */}
-        <main className="app-content">
-          <Outlet />
-        </main>
+          </select>
+          <button className="chrome-btn" type="button" title="Command palette">
+            ⌘K
+          </button>
+          <button className="chrome-btn" type="button" title="Alerts">
+            🔔
+          </button>
+        </header>
+        <Outlet />
       </div>
     </div>
   );
