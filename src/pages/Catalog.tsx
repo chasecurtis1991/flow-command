@@ -1,42 +1,72 @@
+import { useState } from "react";
+import { useApp } from "../lib/app";
+import { products, storeChipLabel } from "../lib/mock";
+import { money } from "../lib/shopify";
+import { EmptyState, Pill, SampleData } from "../components/ui";
+
+const price = (n: number) => money(`${n} USD`);
+
 export function Catalog() {
+  const { toast } = useApp();
+  const [q, setQ] = useState("");
+  const [view, setView] = useState<"table" | "grid">("table");
+  const s = q.trim().toLowerCase();
+  const rows = products.filter((p) => !s || `${p.name} ${p.profile}`.toLowerCase().includes(s));
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-greeting">Catalog</h1>
-        <p className="page-subtitle">Product catalog management across all stores</p>
-      </div>
-
-      <div className="card" style={{ padding: '48px', textAlign: 'center' }}>
-        <div className="empty-state-icon">📚</div>
-        <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
-          Product Catalog
-        </h3>
-        <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: '400px', margin: '0 auto 20px' }}>
-          Browse and manage products across Retail, B2B, and Bulk stores.
-          GraphQL queries, bulk editing, and cross-store synchronization coming soon.
-        </p>
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-          <button className="btn btn-primary">Browse products</button>
-          <button className="btn btn-secondary">Import catalog</button>
+    <section className="screen screen-full">
+      <div className="toolbar">
+        <input className="input" style={{ width: 260 }} placeholder="Search products or strains" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn btn-control">Status <span className="muted">All</span></button>
+        <button className="btn btn-control">Visible in <span className="muted">Any store</span></button>
+        <button className="btn btn-control">Type <span className="muted">Flower</span></button>
+        <SampleData />
+        <div className="spacer" />
+        <div className="seg-sm">
+          <button className={`seg-sm-item${view === "table" ? " active" : ""}`} onClick={() => setView("table")}>Table</button>
+          <button className={`seg-sm-item${view === "grid" ? " active" : ""}`} onClick={() => setView("grid")}>Grid</button>
         </div>
+        <button className="btn btn-primary" onClick={() => toast("Product creation ships in a later release")}>New product</button>
       </div>
 
-      {/* Preview Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '24px' }}>
-        {[
-          { title: "Active Products", value: "—", icon: "✓" },
-          { title: "Draft Products", value: "—", icon: "✍️" },
-          { title: "Archived", value: "—", icon: "📦" },
-        ].map((stat, idx) => (
-          <div key={idx} className="card" style={{ padding: '20px', textAlign: 'center' }}>
-            <div style={{ fontSize: '32px', marginBottom: '8px' }}>{stat.icon}</div>
-            <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-              {stat.title}
-            </div>
-            <div style={{ fontSize: '24px', fontWeight: 700 }}>{stat.value}</div>
+      {view === "table" ? (
+        <>
+          <div className="thead cols-cat">
+            <span /><span>Product</span><span>Type</span><span>Status</span><span>Visible in</span><span className="r">Variants</span><span className="r">From</span>
           </div>
-        ))}
-      </div>
-    </div>
+          {rows.length === 0 ? <EmptyState title="No products match" why="Try another product or strain name." /> : (
+            <div className="scroll">
+              {rows.map((p) => (
+                <div key={p.name} className="row tall cols-cat">
+                  <span className="swatch" style={{ backgroundColor: p.swatch }} />
+                  <span className="two-line"><span className="ellip" style={{ fontWeight: 500 }}>{p.name}</span><span className="second">{p.profile}</span></span>
+                  <span className="sub">{p.type}</span>
+                  <span><Pill kind={p.statusKind} dot={false}>{p.status}</Pill></span>
+                  <span style={{ display: "flex", gap: 4 }}>{p.stores.map((id) => <span key={id} className={`store-chip ${id}`}>{storeChipLabel[id]}</span>)}</span>
+                  <span className="r soft">{p.variants}</span>
+                  <span className="r">{price(p.price)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="grid-5">
+          {rows.map((p) => (
+            <div key={p.name} className="card product-card">
+              <div className="product-photo" style={{ backgroundColor: p.swatch }}>product photo</div>
+              <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
+                <div className="ellip" style={{ fontWeight: 500 }}>{p.name}</div>
+                <div className="mute" style={{ fontSize: 11.5 }}>{p.type} · {p.profile}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                  <Pill kind={p.statusKind} sm dot={false}>{p.status}</Pill>
+                  <span className="num" style={{ fontSize: 12.5 }}>{price(p.price)}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

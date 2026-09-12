@@ -73,6 +73,10 @@ pub struct Order {
     pub total_price: String,
     pub customer_name: Option<String>,
     pub customer_email: Option<String>,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,6 +92,17 @@ pub struct OrderDetail {
     pub total_tax: String,
     pub customer_name: Option<String>,
     pub customer_email: Option<String>,
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub cancelled: bool,
+    pub total_shipping: Option<String>,
+    pub note: Option<String>,
+    /// Formatted shipping address lines joined with "\n".
+    pub shipping_address: Option<String>,
+    pub customer_orders_count: Option<u64>,
+    /// Shopify `sourceName` (web, pos, shopify_draft_order, …).
+    pub channel: Option<String>,
     pub line_items: Vec<LineItem>,
 }
 
@@ -331,13 +346,20 @@ async fn graphql_query(shop_domain: &str, query: &str) -> Result<serde_json::Val
 }
 
 #[tauri::command]
-async fn fetch_shop_info() -> Result<ShopInfo, String> {
-    let active = get_active_store().unwrap_or(StoreInfo {
-        id: "retail".into(),
-        label: "Retail".into(),
-        domain: SHOP_RETAIL.into(),
-    });
-    let shop_domain = active.domain;
+async fn fetch_shop_info(store_id: Option<String>) -> Result<ShopInfo, String> {
+    // Optional store_id lets Home check every store's connection, not just the active one.
+    let store = match store_id {
+        Some(id) => known_stores()
+            .into_iter()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("Unknown store id: {id}"))?,
+        None => get_active_store().unwrap_or(StoreInfo {
+            id: "retail".into(),
+            label: "Retail".into(),
+            domain: SHOP_RETAIL.into(),
+        }),
+    };
+    let shop_domain = store.domain;
 
     let query = r#"
         {
@@ -379,6 +401,8 @@ async fn list_orders(first: Option<i32>) -> Result<Vec<Order>, String> {
                         createdAt
                         displayFinancialStatus
                         displayFulfillmentStatus
+                        closed
+                        cancelledAt
                         totalPriceSet {{
                             shopMoney {{
                                 amount
@@ -424,6 +448,8 @@ async fn list_orders(first: Option<i32>) -> Result<Vec<Order>, String> {
                     .as_str()
                     .map(|s| s.to_string()),
                 customer_email: node["customer"]["email"].as_str().map(|s| s.to_string()),
+                closed: node["closed"].as_bool().unwrap_or(false),
+                cancelled: !node["cancelledAt"].is_null(),
             })
         })
         .collect();
@@ -464,9 +490,23 @@ async fn get_order(order_id: String) -> Result<OrderDetail, String> {
                         currencyCode
                     }}
                 }}
+                closed
+                cancelledAt
+                note
+                sourceName
+                totalShippingPriceSet {{
+                    shopMoney {{
+                        amount
+                        currencyCode
+                    }}
+                }}
+                shippingAddress {{
+                    formatted(withName: true)
+                }}
                 customer {{
                     displayName
                     email
+                    numberOfOrders
                 }}
                 lineItems(first: 100) {{
                     edges {{
@@ -559,6 +599,30 @@ async fn get_order(order_id: String) -> Result<OrderDetail, String> {
             .as_str()
             .map(|s| s.to_string()),
         customer_email: order["customer"]["email"].as_str().map(|s| s.to_string()),
+        closed: order["closed"].as_bool().unwrap_or(false),
+        cancelled: !order["cancelledAt"].is_null(),
+        total_shipping: match (
+            order["totalShippingPriceSet"]["shopMoney"]["amount"].as_str(),
+            order["totalShippingPriceSet"]["shopMoney"]["currencyCode"].as_str(),
+        ) {
+            (Some(a), Some(c)) => Some(format!("{a} {c}")),
+            _ => None,
+        },
+        note: order["note"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| s.to_string()),
+        shipping_address: order["shippingAddress"]["formatted"].as_array().map(|lines| {
+            lines
+                .iter()
+                .filter_map(|l| l.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }),
+        customer_orders_count: order["customer"]["numberOfOrders"]
+            .as_str()
+            .and_then(|s| s.parse().ok()),
+        channel: order["sourceName"].as_str().map(|s| s.to_string()),
         line_items,
     })
 }

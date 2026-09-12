@@ -1,198 +1,128 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useApp } from "../lib/app";
+import { STORES, type Order, type StoreId, fetchShopInfo, isOpenFulfillment, loadOrders, money, moneyNum, storeById, useOrders } from "../lib/shopify";
+import { activity, shopInv } from "../lib/mock";
+import { SampleData, Status } from "../components/ui";
+
+type Tone = "green" | "amber" | "red" | "mute";
+interface Health { kind: Tone; text: string }
+const COLOR: Record<Tone, string> = { green: "var(--green)", amber: "var(--amber)", red: "var(--red)", mute: "var(--mute)" };
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+const CHECKING: Health = { kind: "mute", text: "Checking…" };
+const SHORTCUTS: [string, string][] = [["Low stock", "/inventory"], ["Unposted COAs", "/lab"], ["Draft products", "/catalog"], ["Store settings", "/settings"]];
+
+const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
+const age = (o: Order) => Date.now() - new Date(o.createdAt).getTime();
 
 export function Home() {
-  const [shopInfo, setShopInfo] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
+  const { store, storeReady, openSheet } = useApp();
+  const cache = useOrders();
+  const [health, setHealth] = useState<Record<StoreId, Health>>({ retail: CHECKING, b2b: CHECKING, bulk: CHECKING });
 
+  useEffect(() => { if (storeReady && cache.status === "idle") void loadOrders(store); }, [storeReady, store, cache.status]);
+
+  // Connection health: ping every store's Admin API once, timing each call.
   useEffect(() => {
-    fetchShopInfo();
+    let alive = true;
+    STORES.forEach((s) => {
+      const t0 = performance.now();
+      fetchShopInfo(s.id)
+        .then(() => alive && setHealth((h) => ({ ...h, [s.id]: { kind: "green", text: `Healthy · ${Math.round(performance.now() - t0)} ms` } })))
+        .catch((e) => alive && setHealth((h) => ({ ...h, [s.id]: String(e).includes("429") ? { kind: "amber", text: "Rate-limited" } : { kind: "red", text: "Unreachable" } })));
+    });
+    return () => { alive = false; };
   }, []);
 
-  async function fetchShopInfo() {
-    setLoading(true);
-    try {
-      const info = await invoke<any>("fetch_shop_info");
-      setShopInfo(info);
-    } catch (error) {
-      console.error("Failed to fetch shop info:", error);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // KPIs derived from the (up to 50 most recent) cached orders for the active store.
+  const data = cache.status === "data";
+  const last24 = cache.orders.filter((o) => age(o) <= DAY);
+  const prev24 = cache.orders.filter((o) => age(o) > DAY && age(o) <= 2 * DAY);
+  const pct = prev24.length ? Math.round(((last24.length - prev24.length) / prev24.length) * 100) : null;
+  const currency = cache.orders[0]?.totalPrice.split(" ")[1] ?? "USD";
+  const open = cache.orders.filter(isOpenFulfillment);
+  const overdue = open.filter((o) => age(o) > 2 * DAY);
+  const oldest = open.reduce<Order | null>((a, o) => (!a || age(o) > age(a) ? o : a), null);
+  const low = shopInv.filter((v) => v.lowStock);
 
-  function getGreeting() {
-    const hour = new Date().getHours();
-    if (hour < 12) return "Good morning";
-    if (hour < 17) return "Good afternoon";
-    return "Good evening";
-  }
-
-  const kpis = [
-    { label: "Orders (24h)", value: "47", change: "+32%", positive: true },
-    { label: "Open fulfillments", value: "12", change: "+25%", positive: true },
-    { label: "Low stock", value: "8", change: "1 new", positive: false },
-    { label: "Alerts", value: "3", change: "3 unread", positive: false },
+  const kpis: { label: string; value: string | number; delta: string; tone: Tone; sub: string }[] = [
+    {
+      label: "Orders · 24h", value: data ? last24.length : "—",
+      delta: !data || pct == null ? "—" : `${pct >= 0 ? "+" : "−"}${Math.abs(pct)}%`, tone: !data || pct == null ? "mute" : pct >= 0 ? "green" : "red",
+      sub: data ? `${money(`${last24.reduce((a, o) => a + moneyNum(o.totalPrice), 0).toFixed(2)} ${currency}`)} · ${storeById(store).label}` : "Loading…",
+    },
+    {
+      label: "Open fulfillments", value: data ? open.length : "—",
+      delta: data ? `${overdue.length} overdue` : "—", tone: overdue.length ? "amber" : "mute",
+      sub: oldest ? `Oldest: ${oldest.name} · ${Math.floor(age(oldest) / DAY)} days` : data ? "Nothing waiting" : "Loading…",
+    },
+    { label: "Low stock", value: low.length, delta: "FGINV", tone: "mute", sub: low[0] ? `${low[0].title} ${low[0].size} at ${low[0].avail}` : "All variants stocked" },
+    { label: "Alerts", value: 3, delta: "1 new", tone: "red", sub: "COA unposted · drift · wire pending" },
   ];
 
-  const activities = [
-    { time: "10:41", text: "Order #W-10443 paid · Warren Ortega", status: "paid", amount: "$108.00" },
-    { time: "9:47", text: "Order #W-3591 fulfilled · Sarah Rose backordered", status: "fulfilled" },
-    { time: "8:52", text: "Order #R-10441 fulfilled · tracking sent", status: "fulfilled" },
-    { time: "8:12", text: "Draft returned FC-SPS-L56 · FGNV 131 on Shopify #02", status: "note" },
-    { time: "7:45", text: "COA-02-56-0919 imported · needs review before posting", status: "note" },
-    { time: "7:32", text: "Token rotated for my-craft-flower.myshopify.co", status: "note" },
-  ];
+  const conn = cache.status === "data" ? <span style={{ color: "var(--green)" }}>Shopify connected</span>
+    : cache.status === "error" ? <span style={{ color: "var(--red)" }}>Shopify unreachable</span>
+    : <span className="mute">Connecting…</span>;
 
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-greeting">{getGreeting()}, Chase</h1>
-        <p className="page-subtitle">
-          Thursday, Sep 11, 2026 · Active store: <strong>Retail</strong> · Shopify
-        </p>
+    <section className="screen screen-pad">
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
+        <div>
+          <div className="h-title">{greeting()}, Chase</div>
+          <div className="sub" style={{ marginTop: 2 }}>
+            {new Intl.DateTimeFormat("en-US", { weekday: "long", month: "short", day: "numeric" }).format(new Date())} · Active store:{" "}
+            <span style={{ color: "var(--text)", fontWeight: 500 }}>{storeById(store).label}</span> · {conn}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-primary btn-lg" onClick={() => navigate("/orders")}>View orders</button>
+          <button className="btn btn-secondary btn-lg" onClick={openSheet}>Receive inventory</button>
+        </div>
       </div>
 
-      {/* Primary Actions */}
-      <div style={{ display: 'flex', gap: '12px', marginBottom: '28px' }}>
-        <button className="btn btn-primary" onClick={fetchShopInfo}>
-          {loading ? "Loading..." : "View orders"}
-        </button>
-        <button className="btn btn-secondary">Receive inventory</button>
-      </div>
-
-      {/* KPI Grid */}
       <div className="kpi-grid">
-        {kpis.map((kpi, idx) => (
-          <div key={idx} className="card kpi-card">
-            <div className="kpi-label">{kpi.label}</div>
-            <div className="kpi-value">{kpi.value}</div>
-            <div className={`kpi-change ${kpi.positive ? 'positive' : 'negative'}`}>
-              <span>{kpi.positive ? '↑' : '→'}</span>
-              <span>{kpi.change}</span>
-            </div>
+        {kpis.map((k, i) => (
+          <div key={k.label} className="card kpi" style={{ animationDelay: `${i * 60}ms` }}>
+            <div className="kpi-top"><span>{k.label}</span><span className="num" style={{ color: COLOR[k.tone] }}>{k.delta}</span></div>
+            <div className="kpi-value">{k.value}</div>
+            <div className="kpi-sub">{k.sub}</div>
           </div>
         ))}
       </div>
 
-      {/* Content Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: '20px' }}>
-        {/* Recent Activity */}
-        <div className="card">
-          <div className="card-title">Recent Activity</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {activities.map((activity, idx) => (
-              <div 
-                key={idx}
-                style={{ 
-                  display: 'flex', 
-                  alignItems: 'flex-start',
-                  gap: '12px',
-                  padding: '10px 0',
-                  borderBottom: idx < activities.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none'
-                }}
-              >
-                <span style={{ 
-                  fontSize: '11px', 
-                  color: 'var(--text-tertiary)',
-                  fontVariantNumeric: 'tabular-nums',
-                  minWidth: '36px'
-                }}>
-                  {activity.time}
-                </span>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: '13px', color: 'var(--text-primary)', marginBottom: '2px' }}>
-                    {activity.text}
-                  </div>
-                  {activity.amount && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-                      {activity.amount}
-                    </div>
-                  )}
-                </div>
-                {activity.status === 'paid' && (
-                  <span className="status-pill paid">
-                    <span className="dot"></span>
-                    Paid
-                  </span>
-                )}
-                {activity.status === 'fulfilled' && (
-                  <span className="status-pill fulfilled">
-                    <span className="dot"></span>
-                    Fulfilled
-                  </span>
-                )}
-                {activity.status === 'note' && (
-                  <span style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>Note</span>
-                )}
+      <div className="home-grid">
+        <div className="card clip">
+          <div className="card-head"><span>Recent activity</span><SampleData /></div>
+          {activity.map((a, i) => (
+            <div key={i} className="act-row" style={{ animationDelay: `${i * 50}ms` }}>
+              <span className="mute num" style={{ fontSize: 12 }}>{a.time}</span>
+              <span className={`dot d7 ${a.dot}`} />
+              <span className="ellip">{a.text}</span>
+              <span className="tag">{a.store}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className="card card-pad">
+            <div className="strong" style={{ marginBottom: 10 }}>Connection health</div>
+            {STORES.map((s) => (
+              <div key={s.id} className="health-row">
+                <span className="soft">{s.short} · Admin API</span>
+                <Status kind={health[s.id].kind}>{health[s.id].text}</Status>
               </div>
             ))}
+            <div className="health-row"><span className="soft">FGINV database</span><Status kind="mute">Not connected</Status></div>
           </div>
-        </div>
-
-        {/* Sidebar Cards */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {/* Connection Health */}
-          <div className="card">
-            <div className="card-title">Connection Health</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Retail · Admin API</span>
-                <span className="status-pill" style={{ background: 'var(--success-soft)', color: 'var(--success)' }}>
-                  <span className="dot" style={{ background: 'var(--success)' }}></span>
-                  Healthy · 641 ms
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>B2B · Admin API</span>
-                <span className="status-pill" style={{ background: 'var(--success-soft)', color: 'var(--success)' }}>
-                  <span className="dot" style={{ background: 'var(--success)' }}></span>
-                  Healthy
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Bulk · Admin API</span>
-                <span className="status-pill" style={{ background: 'var(--success-soft)', color: 'var(--success)' }}>
-                  <span className="dot" style={{ background: 'var(--success)' }}></span>
-                  Healthy
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>FGINV · Database</span>
-                <span className="status-pill" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-tertiary)' }}>
-                  <span className="dot" style={{ background: 'var(--text-tertiary)' }}></span>
-                  Offline
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Shortcuts */}
-          <div className="card">
-            <div className="card-title">Shortcuts</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <button className="btn btn-secondary" style={{ justifyContent: 'flex-start', width: '100%' }}>
-                <span>📊</span>
-                <span>Live stock</span>
-              </button>
-              <button className="btn btn-secondary" style={{ justifyContent: 'flex-start', width: '100%' }}>
-                <span>✍️</span>
-                <span>Draft products</span>
-              </button>
-              <button className="btn btn-secondary" style={{ justifyContent: 'flex-start', width: '100%' }}>
-                <span>⚙️</span>
-                <span>Store settings</span>
-              </button>
+          <div className="card card-pad">
+            <div className="strong" style={{ marginBottom: 8 }}>Shortcuts</div>
+            <div className="shortcut-grid">
+              {SHORTCUTS.map(([label, path]) => <button key={path} className="btn btn-control" onClick={() => navigate(path)}>{label}</button>)}
             </div>
           </div>
         </div>
       </div>
-
-      {shopInfo && (
-        <div style={{ marginTop: '20px', padding: '12px', background: 'var(--accent-glow)', borderRadius: 'var(--radius-md)', fontSize: '12px', color: 'var(--text-secondary)' }}>
-          Connected to <strong>{shopInfo.shop_name || shopInfo.shop_domain}</strong> · {shopInfo.status}
-        </div>
-      )}
-    </div>
+    </section>
   );
 }

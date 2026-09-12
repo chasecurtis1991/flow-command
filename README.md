@@ -41,6 +41,12 @@ This starts:
 
 **Hot reload**: Frontend changes reload automatically; Rust changes require restart.
 
+## Browser preview (no Tauri)
+
+`npm run dev` and open http://localhost:1420 in a browser: Tauri `invoke` is mocked with the design's sample orders
+(`src/lib/devMock.ts`) so every screen can be reviewed. Screens without a backend yet (inventory, catalog, COAs,
+customers, analytics) show a **Sample data** pill in both modes. Use `npm run tauri dev` for live Shopify data.
+
 ## Usage
 
 ### Orders
@@ -48,7 +54,7 @@ This starts:
 2. Navigate to **Orders**
 3. Recent orders load automatically (50 most recent)
 4. Click any order row → detail panel shows line items, customer, totals
-5. Switch store via header dropdown → orders auto-refresh
+5. Switch store with the segmented switcher in the title bar (or ⌘1 / ⌘2 / ⌘3) → orders auto-refresh
 6. Click "Refresh" to reload manually
 
 Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).

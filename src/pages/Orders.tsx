@@ -1,350 +1,179 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { useApp } from "../lib/app";
+import {
+  type LineItem, type OrderDetail, type StoreId, channelLabel, fmtCreated, fulStatus, getOrder, isOpenFulfillment, loadOrders, money, moneyNum,
+  orderAdminUrl, payStatus, storeById, useOrders,
+} from "../lib/shopify";
+import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 
-interface Order {
-  id: string;
-  name: string;
-  createdAt: string;
-  displayFinancialStatus: string | null;
-  displayFulfillmentStatus: string | null;
-  totalPrice: string;
-  customerName: string | null;
-  customerEmail: string | null;
-}
-
-interface OrderDetail {
-  id: string;
-  name: string;
-  createdAt: string;
-  displayFinancialStatus: string | null;
-  displayFulfillmentStatus: string | null;
-  totalPrice: string;
-  subtotalPrice: string;
-  totalTax: string;
-  customerName: string | null;
-  customerEmail: string | null;
-  lineItems: LineItem[];
-}
-
-interface LineItem {
-  title: string;
-  sku: string | null;
-  quantity: number;
-  price: string;
-}
+const lineTotal = (li: LineItem) => money(`${(moneyNum(li.price) * li.quantity).toFixed(2)} ${li.price.split(/\s+/)[1] ?? "USD"}`);
 
 export function Orders() {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [selectedOrder, setSelectedOrder] = useState<OrderDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const { store, storeReady, refresh } = useApp();
+  const cache = useOrders();
+  const [params, setParams] = useSearchParams();
+  const [q, setQ] = useState("");
+  const [unfulfilledOnly, setUnfulfilledOnly] = useState(true);
+  const [detail, setDetail] = useState<{ id: string; data?: OrderDetail; error?: string }>({ id: "" });
 
   useEffect(() => {
-    loadOrders();
+    if (storeReady && (cache.status === "idle" || (cache.store !== store && cache.status !== "loading"))) void loadOrders(store);
+  }, [storeReady, store, cache.status, cache.store]);
 
-    const handleStoreChange = () => {
-      setSelectedOrder(null);
-      loadOrders();
-    };
-    window.addEventListener("storeChanged", handleStoreChange);
-    return () => window.removeEventListener("storeChanged", handleStoreChange);
-  }, []);
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    return cache.orders.filter((o) =>
+      (!unfulfilledOnly || isOpenFulfillment(o)) && (!s || `${o.name} ${o.customerName ?? ""} ${o.customerEmail ?? ""}`.toLowerCase().includes(s)));
+  }, [cache.orders, q, unfulfilledOnly]);
 
-  async function loadOrders() {
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await invoke<Order[]>("list_orders", { first: 50 });
-      setOrders(result);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Selection lives in ?sel=<gid> so the ⌘K palette can deep-link; default to the first visible row.
+  const selParam = params.get("sel");
+  const selOrder = selParam ? cache.orders.find((o) => o.id === selParam) : undefined;
+  const selectedId = selOrder?.id ?? filtered[0]?.id ?? null;
+  const select = (id: string) => setParams({ sel: id }, { replace: true });
+  useEffect(() => { if (selOrder && !isOpenFulfillment(selOrder)) setUnfulfilledOnly(false); }, [selOrder]);
 
-  async function loadOrderDetail(orderId: string) {
-    setDetailLoading(true);
-    setError(null);
-    try {
-      const detail = await invoke<OrderDetail>("get_order", { orderId });
-      setSelectedOrder(detail);
-    } catch (err) {
-      setError(String(err));
-      setSelectedOrder(null);
-    } finally {
-      setDetailLoading(false);
-    }
-  }
+  useEffect(() => {
+    if (!selectedId) { setDetail({ id: "" }); return; }
+    let alive = true;
+    setDetail({ id: selectedId });
+    getOrder(selectedId)
+      .then((d) => alive && setDetail({ id: selectedId, data: d }))
+      .catch((e) => alive && setDetail({ id: selectedId, error: String(e) }));
+    return () => { alive = false; };
+  }, [selectedId]);
 
-  function formatDate(isoDate: string): string {
-    try {
-      const date = new Date(isoDate);
-      return new Intl.DateTimeFormat('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }).format(date);
-    } catch {
-      return isoDate;
-    }
-  }
+  const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    e.preventDefault();
+    const i = filtered.findIndex((o) => o.id === selectedId);
+    const next = filtered[Math.min(filtered.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
+    if (next) select(next.id);
+  };
 
-  function getStatusClass(status: string | null): string {
-    if (!status) return "";
-    const lower = status.toLowerCase();
-    if (lower.includes('paid')) return 'paid';
-    if (lower.includes('fulfilled')) return 'fulfilled';
-    if (lower.includes('pending') || lower.includes('unfulfilled')) return 'pending';
-    return '';
-  }
+  let body;
+  if (cache.status === "loading" || cache.status === "idle") body = <LoadingState label="Loading orders from Shopify…" />;
+  else if (cache.status === "error") body = (
+    <ErrorState title="Couldn’t reach Shopify" why={(cache.error ?? "Unknown error").slice(0, 160)} actions={<>
+      <button className="btn btn-primary" onClick={() => void loadOrders(store, true)}>Retry</button>
+      <button className="btn btn-secondary" onClick={() => navigate("/settings")}>Open settings</button>
+    </>} />
+  );
+  else if (filtered.length === 0) body = (
+    <EmptyState title="No orders match" why="Try widening the date range or clearing the Unfulfilled filter."
+      action={<button className="btn btn-secondary" onClick={() => { setQ(""); setUnfulfilledOnly(false); }}>Clear filters</button>} />
+  );
+  else body = (
+    <div className="scroll" tabIndex={0} onKeyDown={onKey}>
+      {filtered.map((o, i) => {
+        const pay = payStatus(o.displayFinancialStatus), ful = fulStatus(o.displayFulfillmentStatus), on = o.id === selectedId;
+        return (
+          <div key={o.id} className={`row stagger cols-orders${on ? " selected" : ""}`} style={{ animationDelay: `${Math.min(i, 14) * 22}ms` }} onClick={() => select(o.id)}>
+            <span><span className={`check${on ? " on" : ""}`} /></span>
+            <span style={{ fontWeight: 500 }}>{o.name}</span>
+            <span className="sub">{fmtCreated(o.createdAt)}</span>
+            <span className="ellip">{o.customerName ?? o.customerEmail ?? "—"}</span>
+            <span className="r">{money(o.totalPrice)}</span>
+            <span><Pill kind={pay.kind}>{pay.label}</Pill></span>
+            <span><Pill kind={ful.kind}>{ful.label}</Pill></span>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
-    <div className="page-container" style={{ paddingRight: selectedOrder ? '460px' : '40px', position: 'relative', transition: 'padding-right 0.2s ease' }}>
-      {/* Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-        <div style={{ flex: 1, display: 'flex', gap: '8px' }}>
-          <input
-            type="text"
-            placeholder="Search orders..."
-            style={{
-              flex: 1,
-              padding: '0 12px',
-              height: '32px',
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid var(--border-subtle)',
-              borderRadius: 'var(--radius-md)',
-              color: 'var(--text-primary)',
-              fontSize: '13px'
-            }}
-          />
-          <button className="btn btn-secondary">Filter</button>
-        </div>
-        <span style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>
-          {orders.length} orders
-        </span>
-        <button 
-          className="btn btn-secondary" 
-          onClick={loadOrders}
-          disabled={loading}
-        >
-          {loading ? "Loading..." : "↻ Refresh"}
-        </button>
-      </div>
-
-      {error && (
-        <div className="error-banner">
-          <strong>Error:</strong> {error}
-        </div>
-      )}
-
-      {/* Orders Table */}
-      <div className="card" style={{ padding: 0 }}>
-        {loading && <div className="loading-state">Loading orders...</div>}
-
-        {!loading && orders.length === 0 && (
-          <div className="empty-state">
-            <div className="empty-state-icon">📦</div>
-            <div>No orders found</div>
+    <section className="screen screen-full">
+      <div className="orders">
+        <div className="orders-list">
+          <div className="toolbar">
+            <input className="input" style={{ width: 280 }} placeholder="Search orders, customers, SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button className="btn btn-control">Status <span className="muted">All</span></button>
+            <button className="btn btn-control">Date <span className="muted">Last 30 days</span></button>
+            <button className={`btn btn-control${unfulfilledOnly ? " on" : ""}`} onClick={() => setUnfulfilledOnly((v) => !v)}>
+              Unfulfilled {unfulfilledOnly && <span className="sub">×</span>}
+            </button>
+            <div className="spacer" />
+            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{filtered.length} orders</span>
+            <button className="btn btn-control" onClick={refresh}>Refresh</button>
           </div>
-        )}
-
-        {!loading && orders.length > 0 && (
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>ORDER</th>
-                  <th>DATE</th>
-                  <th>CUSTOMER</th>
-                  <th>TOTAL</th>
-                  <th>PAYMENT</th>
-                  <th>FULFILLMENT</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orders.map((order) => (
-                  <tr
-                    key={order.id}
-                    onClick={() => loadOrderDetail(order.id)}
-                    className={selectedOrder?.id === order.id ? "selected" : ""}
-                  >
-                    <td style={{ color: 'var(--accent-primary)', fontWeight: 500 }}>
-                      {order.name}
-                    </td>
-                    <td style={{ color: 'var(--text-tertiary)', fontSize: '12px' }}>
-                      {formatDate(order.createdAt)}
-                    </td>
-                    <td>{order.customerName || order.customerEmail || "—"}</td>
-                    <td style={{ fontWeight: 500, fontVariantNumeric: 'tabular-nums' }}>
-                      {order.totalPrice}
-                    </td>
-                    <td>
-                      {order.displayFinancialStatus && (
-                        <span className={`status-pill ${getStatusClass(order.displayFinancialStatus)}`}>
-                          <span className="dot"></span>
-                          {order.displayFinancialStatus}
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {order.displayFulfillmentStatus && (
-                        <span className={`status-pill ${getStatusClass(order.displayFulfillmentStatus)}`}>
-                          <span className="dot"></span>
-                          {order.displayFulfillmentStatus}
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div className="thead sticky cols-orders">
+            <span><span className="check" /></span><span>Order</span><span>Created</span><span>Customer</span><span className="r">Total</span><span>Payment</span><span>Fulfillment</span>
           </div>
-        )}
-      </div>
-
-      {/* Detail Panel */}
-      {(selectedOrder || detailLoading) && (
-        <div style={{
-          position: 'fixed',
-          right: 0,
-          top: 'var(--topbar-height)',
-          bottom: 0,
-          width: '420px',
-          background: 'var(--bg-elevated)',
-          borderLeft: '1px solid var(--border-subtle)',
-          overflowY: 'auto',
-          padding: '24px',
-          zIndex: 100
-        }}>
-          {detailLoading && (
-            <div className="loading-state">Loading order details...</div>
-          )}
-
-          {selectedOrder && !detailLoading && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
-                <div>
-                  <h2 style={{ fontSize: '20px', fontWeight: 600, marginBottom: '4px' }}>
-                    {selectedOrder.name}
-                  </h2>
-                  <p style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>
-                    {formatDate(selectedOrder.createdAt)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSelectedOrder(null)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-tertiary)',
-                    fontSize: '20px',
-                    cursor: 'pointer',
-                    padding: '4px 8px'
-                  }}
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="card" style={{ marginBottom: '16px', padding: '16px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-                  Customer
-                </div>
-                <div style={{ fontSize: '14px', fontWeight: 500, marginBottom: '4px' }}>
-                  {selectedOrder.customerName || "No name"}
-                </div>
-                {selectedOrder.customerEmail && (
-                  <div style={{ fontSize: '13px', color: 'var(--text-tertiary)' }}>
-                    {selectedOrder.customerEmail}
-                  </div>
-                )}
-              </div>
-
-              <div className="card" style={{ marginBottom: '16px', padding: '16px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-                  Status
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Payment</span>
-                    {selectedOrder.displayFinancialStatus && (
-                      <span className={`status-pill ${getStatusClass(selectedOrder.displayFinancialStatus)}`}>
-                        <span className="dot"></span>
-                        {selectedOrder.displayFinancialStatus}
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Fulfillment</span>
-                    {selectedOrder.displayFulfillmentStatus && (
-                      <span className={`status-pill ${getStatusClass(selectedOrder.displayFulfillmentStatus)}`}>
-                        <span className="dot"></span>
-                        {selectedOrder.displayFulfillmentStatus}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <div className="card" style={{ marginBottom: '16px', padding: '16px' }}>
-                <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '12px' }}>
-                  Line Items ({selectedOrder.lineItems.length})
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {selectedOrder.lineItems.map((item, idx) => (
-                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '10px', borderBottom: idx < selectedOrder.lineItems.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '13px', marginBottom: '2px' }}>
-                          {item.title}
-                        </div>
-                        {item.sku && (
-                          <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'Monaco, monospace' }}>
-                            SKU: {item.sku}
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontSize: '13px' }}>×{item.quantity}</div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-tertiary)' }}>
-                          {item.price}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="card" style={{ padding: '16px' }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Subtotal</span>
-                    <span>{selectedOrder.subtotalPrice}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>Tax</span>
-                    <span>{selectedOrder.totalTax}</span>
-                  </div>
-                  <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    fontSize: '15px', 
-                    fontWeight: 600, 
-                    paddingTop: '8px', 
-                    borderTop: '1px solid var(--border-subtle)',
-                    marginTop: '4px'
-                  }}>
-                    <span>Total</span>
-                    <span>{selectedOrder.totalPrice}</span>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
+          {body}
         </div>
-      )}
+        <Detail store={store} id={detail.id} data={detail.data} error={detail.error} />
+      </div>
+    </section>
+  );
+}
+
+function Detail({ store, id, data, error }: { store: StoreId; id: string; data?: OrderDetail; error?: string }) {
+  if (!id) return <div className="detail"><div className="state mute">Select an order</div></div>;
+  if (!data) {
+    return <div className="detail" key={id}>{error ? <ErrorState title="Couldn’t load order" why={error.slice(0, 160)} /> : <LoadingState label="Loading order…" />}</div>;
+  }
+  const pay = payStatus(data.displayFinancialStatus), ful = fulStatus(data.displayFulfillmentStatus);
+  return (
+    <div className="detail" key={id}>
+      <div className="detail-head">
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="h-heading">{data.name}</span>
+          <Pill kind={pay.kind} dot={false}>{pay.label}</Pill>
+          <Pill kind={ful.kind} dot={false}>{ful.label}</Pill>
+        </div>
+        <div className="mute" style={{ fontSize: 12, marginTop: 4 }}>{fmtCreated(data.createdAt)} · {storeById(store).label} · {channelLabel(data.channel)}</div>
+      </div>
+      <div className="detail-section" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>
+          <span className="label">Customer</span>
+          <div style={{ fontWeight: 500 }}>{data.customerName ?? "—"}</div>
+          {data.customerEmail && <div className="sub" style={{ fontSize: 12 }}>{data.customerEmail}</div>}
+          {data.customerOrdersCount != null && <div className="sub" style={{ fontSize: 12 }}>{data.customerOrdersCount} orders</div>}
+        </div>
+        <div>
+          <span className="label">Ship to</span>
+          <div className="soft" style={{ fontSize: 12.5, whiteSpace: "pre-line" }}>{data.shippingAddress ?? "—"}</div>
+        </div>
+      </div>
+      <div className="detail-section">
+        <span className="label" style={{ marginBottom: 8 }}>Line items</span>
+        <div className="cols-items" style={{ display: "grid", gap: 8, fontSize: 11.5, color: "var(--mute)", paddingBottom: 6, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <span>Item</span><span className="r">Qty</span><span className="r">Price</span>
+        </div>
+        {data.lineItems.map((li, i) => (
+          <div key={i} className="cols-items num" style={{ display: "grid", gap: 8, padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.04)", alignItems: "center" }}>
+            <div style={{ minWidth: 0 }}>
+              <div className="ellip">{li.title}</div>
+              {li.sku && <div className="mute mono" style={{ fontSize: 11.5 }}>{li.sku}</div>}
+            </div>
+            <span className="r soft">{li.quantity}</span>
+            <span className="r">{lineTotal(li)}</span>
+          </div>
+        ))}
+        <div className="totals">
+          <span>Subtotal</span><span className="r">{money(data.subtotalPrice)}</span>
+          <span>Shipping</span><span className="r">{data.totalShipping ? money(data.totalShipping) : "—"}</span>
+          {moneyNum(data.totalTax) > 0 && <><span>Tax</span><span className="r">{money(data.totalTax)}</span></>}
+          <span className="total">Total</span><span className="total r">{money(data.totalPrice)}</span>
+        </div>
+      </div>
+      <div className="detail-section">
+        <span className="label">Notes</span>
+        <div className="note-box">{data.note ?? "—"}</div>
+      </div>
+      <div className="detail-section" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <span className="label" style={{ marginBottom: 0 }}>Actions</span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-control grow" disabled>Fulfill</button>
+          <button className="btn btn-control grow" disabled>Refund</button>
+          <button className="btn btn-secondary" onClick={() => void openUrl(orderAdminUrl(store, data.id))}>Open in Shopify</button>
+        </div>
+        <div className="mute" style={{ fontSize: 11.5 }}>Write actions ship in a later release. Read-only mirror of Shopify today.</div>
+      </div>
     </div>
   );
 }

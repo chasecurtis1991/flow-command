@@ -1,202 +1,144 @@
-import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useApp } from "../lib/app";
+import { STORES, getCredentials, saveCredentials, storeById, useOrders } from "../lib/shopify";
+import { Pill, SampleData, Status } from "../components/ui";
+
+type Creds = { status: "loading" | "saved" | "missing"; clientId?: string };
+const mask = (s: string) => (s.length > 8 ? `${s.slice(0, 4)}…${s.slice(-4)}` : "••••");
 
 export function Settings() {
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [saveStatus, setSaveStatus] = useState("");
-  const [saving, setSaving] = useState(false);
+  const { store, accent, setAccent, density, setDensity, toast } = useApp();
+  const cache = useOrders();
+  const [creds, setCreds] = useState<Creds>({ status: "loading" });
+  const [modal, setModal] = useState(false);
+  const [push, setPush] = useState(true);
 
-  async function saveCredentials() {
-    setSaving(true);
-    setSaveStatus("");
-    try {
-      await invoke("save_shopify_credentials", {
-        clientId,
-        clientSecret,
-      });
-      setSaveStatus("✅ Credentials saved to Keychain");
-      setClientId("");
-      setClientSecret("");
-    } catch (error) {
-      setSaveStatus(`❌ Error: ${error}`);
-    } finally {
-      setSaving(false);
-    }
-  }
+  const load = useCallback(() => {
+    getCredentials().then((c) => setCreds({ status: "saved", clientId: c.clientId })).catch(() => setCreds({ status: "missing" }));
+  }, []);
+  useEffect(load, [load]);
 
-  const stores = [
-    { id: "retail", label: "Retail", domain: "3wvfyr-1i.myshopify.com", dot: "retail" },
-    { id: "b2b", label: "B2B / Wholesale", domain: "b8h8vg-ij.myshopify.com", dot: "b2b" },
-    { id: "bulk", label: "Bulk / Craft Flower", domain: "fg-craft-flower.myshopify.com", dot: "bulk" },
-  ];
+  const notSaved = creds.status === "missing" ? <Pill kind="amber">Not saved</Pill> : null;
+  const activeStatus = cache.status === "data" ? <Status kind="green">Connected</Status>
+    : cache.status === "error" ? <Status kind="red">Unreachable</Status> : <Status kind="mute">Checking…</Status>;
 
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-greeting">Settings</h1>
-        <p className="page-subtitle">Manage credentials, stores, and app configuration</p>
-      </div>
-
-      <div style={{ maxWidth: '680px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-        {/* Shopify Credentials */}
-        <div className="card" style={{ padding: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>
-            Shopify Credentials
-          </h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-            Client credentials are stored securely in macOS Keychain.
-            These are shared across all three stores.
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            <div>
-              <label style={{ 
-                display: 'block', 
-                fontSize: '12px', 
-                fontWeight: 500, 
-                color: 'var(--text-secondary)', 
-                marginBottom: '6px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px'
-              }}>
-                Client ID
-              </label>
-              <input
-                type="text"
-                value={clientId}
-                onChange={(e) => setClientId(e.target.value)}
-                placeholder="Enter Shopify client ID"
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '13px'
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ 
-                display: 'block', 
-                fontSize: '12px', 
-                fontWeight: 500, 
-                color: 'var(--text-secondary)', 
-                marginBottom: '6px',
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px'
-              }}>
-                Client Secret
-              </label>
-              <input
-                type="password"
-                value={clientSecret}
-                onChange={(e) => setClientSecret(e.target.value)}
-                placeholder="Enter Shopify client secret"
-                style={{
-                  width: '100%',
-                  padding: '10px 12px',
-                  background: 'rgba(255,255,255,0.04)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--text-primary)',
-                  fontSize: '13px'
-                }}
-              />
-            </div>
-
-            <button
-              className="btn btn-primary"
-              onClick={saveCredentials}
-              disabled={!clientId || !clientSecret || saving}
-              style={{ alignSelf: 'flex-start' }}
-            >
-              {saving ? "Saving..." : "Save to Keychain"}
-            </button>
-
-            {saveStatus && (
-              <div style={{ 
-                padding: '12px', 
-                background: saveStatus.includes('✅') ? 'var(--success-soft)' : 'var(--danger-soft)', 
-                border: `1px solid ${saveStatus.includes('✅') ? 'rgba(63,185,122,0.2)' : 'rgba(229,97,92,0.2)'}`,
-                borderRadius: 'var(--radius-md)',
-                fontSize: '13px',
-                color: saveStatus.includes('✅') ? 'var(--success)' : 'var(--danger)'
-              }}>
-                {saveStatus}
-              </div>
-            )}
-          </div>
+    <section className="screen screen-pad" style={{ padding: "24px 28px 40px", gap: 22, maxWidth: 760 }}>
+      <Group title="Shopify credentials">
+        <div className="list-row"><span>Client ID</span>{creds.status === "saved" ? <span className="mono sub" style={{ fontSize: 12 }}>{mask(creds.clientId ?? "")}</span> : notSaved}</div>
+        <div className="list-row">
+          <span>Client secret</span>
+          <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span className="mono sub" style={{ fontSize: 12 }}>••••••••••••••••</span>
+            {creds.status === "saved" ? <Pill kind="green">Saved in Keychain</Pill> : notSaved}
+          </span>
         </div>
+        <div className="list-row"><span>Access tokens</span><span className="value">3 stores · cached 23h · refreshed on demand</span></div>
+        <div className="list-row">
+          <span className="sub" style={{ fontSize: 12.5 }}>Stored in the macOS Keychain under com.flowgardens.command</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => setModal(true)}>Update credentials…</button>
+        </div>
+      </Group>
 
-        {/* Store Domains */}
-        <div className="card" style={{ padding: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>
-            Store Domains
-          </h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-            Flow Command connects to these Shopify Plus stores using the admin API.
-          </p>
+      <Group title="Stores">
+        {STORES.map((s) => (
+          <div key={s.id} className="list-row tall" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", gap: 14 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span className={`dot d8 ${s.id}`} />
+              <span className="two-line"><span style={{ fontWeight: 500 }}>{s.label}</span><span className="second">{s.plan}</span></span>
+            </span>
+            <span className="mono sub" style={{ fontSize: 12 }}>{s.domain}</span>
+            {s.id === store ? activeStatus : <Status kind="mute">Idle</Status>}
+          </div>
+        ))}
+        <div className="list-row"><span>Default store on launch</span><span className="value">{storeById(store).label} ›</span></div>
+      </Group>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {stores.map((store) => (
-              <div 
-                key={store.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '12px',
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid var(--border-subtle)',
-                  borderRadius: 'var(--radius-md)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <span className={`store-dot ${store.dot}`} style={{ width: '8px', height: '8px', borderRadius: '50%' }}></span>
-                  <div>
-                    <div style={{ fontSize: '13px', fontWeight: 500 }}>{store.label}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-tertiary)', fontFamily: 'Monaco, monospace' }}>
-                      {store.domain}
-                    </div>
-                  </div>
-                </div>
-                <span className="status-pill" style={{ background: 'var(--success-soft)', color: 'var(--success)' }}>
-                  <span className="dot" style={{ background: 'var(--success)' }}></span>
-                  Connected
-                </span>
-              </div>
+      <Group title="Sync" extra={<SampleData />}>
+        <div className="list-row"><span>Poll orders every</span><span className="value">2 minutes ›</span></div>
+        <div className="list-row"><span>Push FGINV counts to Shopify</span><button role="switch" aria-checked={push} className={`toggle${push ? "" : " off"}`} onClick={() => setPush((v) => !v)} /></div>
+        <div className="list-row"><span>Notify on drift over</span><span className="value num">10 units ›</span></div>
+      </Group>
+
+      <Group title="Appearance">
+        <div className="list-row">
+          <span>Theme</span>
+          <span className="seg-sm dark"><span className="seg-sm-item active">Dark</span><span className="seg-sm-item">Light</span><span className="seg-sm-item">System</span></span>
+        </div>
+        <div className="list-row">
+          <span>Accent</span>
+          <span style={{ display: "flex", gap: 8 }}>
+            {(["blue", "green"] as const).map((a) => (
+              <button key={a} aria-label={`${a} accent`} onClick={() => setAccent(a)} style={{
+                width: 18, height: 18, borderRadius: "50%", border: 0, cursor: "pointer", background: a === "blue" ? "#4c8dff" : "#3fb97a",
+                outline: accent === a ? "2px solid rgba(255,255,255,0.5)" : "none", outlineOffset: 2,
+              }} />
             ))}
-          </div>
+          </span>
         </div>
+        <div className="list-row link" onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}>
+          <span>Table density</span><span className="value">{density === "compact" ? "Compact" : "Comfortable"} ›</span>
+        </div>
+      </Group>
 
-        {/* App Info */}
-        <div className="card" style={{ padding: '24px' }}>
-          <h3 style={{ fontSize: '16px', fontWeight: 600, marginBottom: '8px' }}>
-            Application
-          </h3>
-          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
-            Flow Command v0.1.0 · Internal proprietary tool
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Platform</span>
-              <span>macOS (Tauri 2)</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>API Version</span>
-              <span>2026-01</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Auth Method</span>
-              <span>Client Credentials (OAuth)</span>
-            </div>
-          </div>
+      <Group title="About">
+        <div className="list-row"><span>Flow Command</span><span className="value num">0.1.0 · macOS</span></div>
+        <div className="list-row"><span>Bundle identifier</span><span className="mono sub" style={{ fontSize: 12 }}>com.flowgardens.command</span></div>
+      </Group>
+
+      {modal && <CredsModal onClose={() => setModal(false)} onSaved={(msg) => { setModal(false); toast(msg); load(); }} />}
+    </section>
+  );
+}
+
+function Group({ title, extra, children }: { title: string; extra?: ReactNode; children: ReactNode }) {
+  return (
+    <div>
+      <div style={{ padding: "0 12px 8px", display: "flex", alignItems: "center", gap: 8 }}><span className="label">{title}</span>{extra}</div>
+      <div className="card list">{children}</div>
+    </div>
+  );
+}
+
+function CredsModal({ onClose, onSaved }: { onClose: () => void; onSaved: (msg: string) => void }) {
+  const [id, setId] = useState("");
+  const [secret, setSecret] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const ready = !!id.trim() && !!secret.trim() && !busy;
+
+  useEffect(() => {
+    const k = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+
+  const save = async () => {
+    if (!ready) return;
+    setBusy(true); setErr(null);
+    try { onSaved(await saveCredentials(id.trim(), secret.trim())); }
+    catch (e) { setErr(String(e)); setBusy(false); }
+  };
+
+  return createPortal(
+    <div className="overlay center" onClick={onClose}>
+      <div className="dialog sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Update Shopify credentials">
+        <div className="sheet-head">
+          <div className="title">Update Shopify credentials</div>
+          <div className="why">Client credentials are shared by all three stores and stored in the macOS Keychain.</div>
+        </div>
+        <div className="sheet-body">
+          <label className="field full">Client ID<input autoFocus className="input input-dark mono" value={id} onChange={(e) => setId(e.target.value)} /></label>
+          <label className="field full">Client secret<input type="password" className="input input-dark" value={secret} onChange={(e) => setSecret(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void save()} /></label>
+          {err && <div className="full" style={{ fontSize: 11.5, color: "var(--red)", marginTop: -4 }}>{err}</div>}
+        </div>
+        <div className="sheet-foot">
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!ready} onClick={() => void save()}>{busy ? "Saving…" : "Save to Keychain"}</button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

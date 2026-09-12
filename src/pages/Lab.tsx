@@ -1,47 +1,48 @@
+import { useState } from "react";
+import { useApp } from "../lib/app";
+import { coas } from "../lib/mock";
+import { EmptyState, Pill, SampleData, Status } from "../components/ui";
+
 export function Lab() {
+  const { toast } = useApp();
+  const [q, setQ] = useState("");
+  const [notPosted, setNotPosted] = useState(false);
+  const s = q.trim().toLowerCase();
+  const rows = coas.filter((c) => (!notPosted || !c.isPosted) && (!s || `${c.file} ${c.strain} ${c.batch} ${c.lab}`.toLowerCase().includes(s)));
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-greeting">Lab / COAs</h1>
-        <p className="page-subtitle">Lab results and Certificates of Analysis management</p>
+    <section className="screen screen-full">
+      <div className="toolbar">
+        <input className="input" style={{ width: 260 }} placeholder="Search by batch, strain or lab" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn btn-control">Parse status <span className="muted">All</span></button>
+        <button className={`btn btn-control${notPosted ? " on" : ""}`} onClick={() => setNotPosted((v) => !v)}>Not posted</button>
+        <SampleData />
+        <div className="spacer" />
+        <span className="mute" style={{ fontSize: 12 }}>Drop PDFs here or</span>
+        <button className="btn btn-primary" onClick={() => toast("COA import ships in a later release")}>Import COA</button>
       </div>
-
-      <div className="card" style={{ padding: '48px', textAlign: 'center' }}>
-        <div className="empty-state-icon">🧪</div>
-        <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
-          Lab Testing & COAs
-        </h3>
-        <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: '480px', margin: '0 auto 20px' }}>
-          Certificate of Analysis management, lab result tracking, and compliance documentation.
-          Import, review, and publish COAs for product batches.
-        </p>
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-          <button className="btn btn-primary">Import COA</button>
-          <button className="btn btn-secondary">View pending</button>
-        </div>
+      <div className="thead cols-coa">
+        <span>Document</span><span>Lab</span><span>Batch</span><span className="r">Total cann.</span><span className="r">Δ9 THC</span><span>Parse</span><span>Linked product</span><span>Storefront</span>
       </div>
-
-      {/* Status Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginTop: '24px' }}>
-        <div className="card" style={{ padding: '18px' }}>
-          <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Needs Review
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--warning)' }}>—</div>
+      {rows.length === 0 ? <EmptyState title="No COAs match" why="Try another batch, strain or lab." /> : (
+        <div className="scroll">
+          {rows.map((c) => (
+            <div key={c.file} className="row taller cols-coa">
+              <span className="cell-2">
+                <span className="pdf-icon">PDF</span>
+                <span className="two-line"><span className="ellip" style={{ fontWeight: 500 }}>{c.file}</span><span className="second">{c.strain} · {c.date}</span></span>
+              </span>
+              <span className="sub">{c.lab}</span>
+              <span className="mono soft" style={{ fontSize: 12 }}>{c.batch}</span>
+              <span className="r">{c.total}</span>
+              <span className="r" style={{ color: c.thcHot ? "var(--amber)" : "var(--text)" }}>{c.thc}</span>
+              <span><Pill kind={c.parseKind}>{c.parse}</Pill></span>
+              <span className="ellip" style={{ color: c.unlinked ? "var(--mute)" : "var(--text)" }}>{c.product}</span>
+              <Status kind={c.isPosted ? "green" : "mute"}>{c.posted}</Status>
+            </div>
+          ))}
         </div>
-        <div className="card" style={{ padding: '18px' }}>
-          <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Published
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--success)' }}>—</div>
-        </div>
-        <div className="card" style={{ padding: '18px' }}>
-          <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Expired
-          </div>
-          <div style={{ fontSize: '28px', fontWeight: 700, color: 'var(--danger)' }}>—</div>
-        </div>
-      </div>
-    </div>
+      )}
+    </section>
   );
 }

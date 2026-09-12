@@ -8,6 +8,7 @@ import { Lab } from "./pages/Lab";
 import { Customers } from "./pages/Customers";
 import { Analytics } from "./pages/Analytics";
 import { Settings } from "./pages/Settings";
+import { DesignSystem } from "./pages/DesignSystem";
 import "./App.css";
 
 function App() {
@@ -24,6 +25,8 @@ function App() {
           <Route path="customers" element={<Customers />} />
           <Route path="analytics" element={<Analytics />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="system" element={<DesignSystem />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
         </Route>
       </Routes>
     </BrowserRouter>

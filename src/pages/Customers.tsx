@@ -1,41 +1,40 @@
+import { useState } from "react";
+import { customers } from "../lib/mock";
+import { money } from "../lib/shopify";
+import { EmptyState, SampleData } from "../components/ui";
+
 export function Customers() {
+  const [q, setQ] = useState("");
+  const s = q.trim().toLowerCase();
+  const rows = customers.filter((c) => !s || `${c.name} ${c.email} ${c.company}`.toLowerCase().includes(s));
+
   return (
-    <div className="page-container">
-      <div className="page-header">
-        <h1 className="page-greeting">Customers</h1>
-        <p className="page-subtitle">Customer relationship management across all stores</p>
+    <section className="screen screen-full">
+      <div className="toolbar">
+        <input className="input" style={{ width: 360 }} placeholder="Look up by name, email, company or phone" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="btn btn-control">Segment <span className="muted">All</span></button>
+        <SampleData />
       </div>
-
-      <div className="card" style={{ padding: '48px', textAlign: 'center' }}>
-        <div className="empty-state-icon">👥</div>
-        <h3 style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
-          Customer Directory
-        </h3>
-        <p style={{ fontSize: '14px', color: 'var(--text-secondary)', maxWidth: '420px', margin: '0 auto 20px' }}>
-          View and manage customer information from Shopify.
-          Search, filter, and view order history, tags, and notes.
-        </p>
-        <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-          <button className="btn btn-primary">Browse customers</button>
-          <button className="btn btn-secondary">Export list</button>
-        </div>
+      <div className="thead cols-cust">
+        <span>Customer</span><span>Company</span><span>Store</span><span className="r">Orders</span><span className="r">Lifetime</span><span>Last order</span>
       </div>
-
-      {/* Quick Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginTop: '24px' }}>
-        <div className="card kpi-card">
-          <div className="kpi-label">Total Customers</div>
-          <div className="kpi-value">—</div>
+      {rows.length === 0 ? <EmptyState title="No customers match" why="Try a name, email or company." /> : (
+        <div className="scroll">
+          {rows.map((c) => (
+            <div key={c.email} className="row tall cols-cust">
+              <span className="cell-2">
+                <span className="avatar">{c.initials}</span>
+                <span className="two-line"><span style={{ fontWeight: 500 }}>{c.name}</span><span className="second">{c.email}</span></span>
+              </span>
+              <span className="soft">{c.company}</span>
+              <span className="sub">{c.store}</span>
+              <span className="r">{c.orders}</span>
+              <span className="r">{money(`${c.ltv} USD`)}</span>
+              <span className="sub">{c.last}</span>
+            </div>
+          ))}
         </div>
-        <div className="card kpi-card">
-          <div className="kpi-label">Active (30d)</div>
-          <div className="kpi-value">—</div>
-        </div>
-        <div className="card kpi-card">
-          <div className="kpi-label">Repeat Rate</div>
-          <div className="kpi-value">—</div>
-        </div>
-      </div>
-    </div>
+      )}
+    </section>
   );
 }
