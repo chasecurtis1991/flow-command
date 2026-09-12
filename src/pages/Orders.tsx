@@ -1,41 +1,95 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useApp } from "../lib/app";
 import {
-  type LineItem, type OrderDetail, type StoreId, channelLabel, fmtCreated, fulStatus, getOrder, isOpenFulfillment, loadOrders, money, moneyNum,
-  orderAdminUrl, payStatus, storeById, useOrders,
+  FINANCIAL_FILTER_VALUES, FULFILLMENT_FILTER_VALUES, OPEN_WORK_STATUSES, ORDER_DEFAULT_PAGE_SIZE, ORDER_PAGE_SIZES,
+  type LineItem, type Order, type OrderDetail, type OrderSortKey, type OrdersRequest, type StoreId,
+  buildOrdersQuery, channelLabel, ensureOrdersPage, fmtCreated, fulStatus, getOrder, goToOrdersPage, isOpenFulfillment, loadOrdersPage, money, moneyNum,
+  orderAdminUrl, payStatus, storeById, useOrders, useOrdersTable,
 } from "../lib/shopify";
+import { type ColumnDef, sameSet, useDebounced, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
+import { ColumnsMenu, FilterChips, PageSizePicker, TableHead, TableRow } from "../components/DataTable";
 
 const lineTotal = (li: LineItem) => money(`${(moneyNum(li.price) * li.quantity).toFixed(2)} ${li.price.split(/\s+/)[1] ?? "USD"}`);
+const str = (v: unknown) => (typeof v === "string" ? v : "");
+const arr = (v: unknown) => (Array.isArray(v) ? (v as string[]) : []);
+const nf = new Intl.NumberFormat("en-US");
+
+// Sorting and filtering happen in Shopify (the table is one page of many), so columns declare `sortable`
+// and map to OrderSortKeys instead of providing client-side accessors.
+const SORT_KEYS: Record<string, OrderSortKey> = {
+  order: "ORDER_NUMBER", created: "CREATED_AT", customer: "CUSTOMER_NAME", total: "TOTAL_PRICE", payment: "FINANCIAL_STATUS", fulfillment: "FULFILLMENT_STATUS",
+};
+const DEFAULT_SORT = { id: "created", dir: "desc" as const };
+
+function orderColumns(selectedId: string | null): ColumnDef<Order>[] {
+  return [
+    { id: "sel", label: "", width: "28px", fixed: true, header: <span className="check" />, cell: (o) => <span className={`check${o.id === selectedId ? " on" : ""}`} /> },
+    {
+      id: "order", label: "Order", width: "110px", sortable: true, cellStyle: () => ({ fontWeight: 500 }),
+      filter: { kind: "text", value: (o) => o.name, placeholder: "Order number" }, cell: (o) => o.name,
+    },
+    { id: "created", label: "Created", width: "130px", sortable: true, sortDir: "desc", cellClass: "sub", cell: (o) => fmtCreated(o.createdAt) },
+    {
+      id: "customer", label: "Customer", width: "minmax(0, 1fr)", sortable: true, cellClass: "ellip",
+      filter: { kind: "text", value: (o) => `${o.customerName ?? ""} ${o.customerEmail ?? ""}`, placeholder: "Name or email" },
+      cell: (o) => o.customerName ?? o.customerEmail ?? "—",
+    },
+    { id: "total", label: "Total", width: "100px", align: "right", sortable: true, sortDir: "desc", cell: (o) => money(o.totalPrice) },
+    {
+      id: "payment", label: "Payment", width: "110px", sortable: true,
+      filter: { kind: "enum", value: (o) => o.displayFinancialStatus, options: FINANCIAL_FILTER_VALUES.map((v) => ({ value: v, label: payStatus(v).label })) },
+      cell: (o) => { const p = payStatus(o.displayFinancialStatus); return <Pill kind={p.kind}>{p.label}</Pill>; },
+    },
+    {
+      id: "fulfillment", label: "Fulfillment", width: "120px", sortable: true,
+      filter: { kind: "enum", value: (o) => o.displayFulfillmentStatus, options: FULFILLMENT_FILTER_VALUES.map((v) => ({ value: v, label: fulStatus(v).label })) },
+      cell: (o) => { const f = fulStatus(o.displayFulfillmentStatus); return <Pill kind={f.kind}>{f.label}</Pill>; },
+    },
+  ];
+}
 
 export function Orders() {
   const navigate = useNavigate();
   const { store, storeReady, refresh } = useApp();
-  const cache = useOrders();
+  const recent = useOrders(); // 50 most recent (Layout warms it) — used to resolve ⌘K deep links
+  const tbl = useOrdersTable();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState("");
-  const [unfulfilledOnly, setUnfulfilledOnly] = useState(true);
-  const [detail, setDetail] = useState<{ id: string; data?: OrderDetail; error?: string }>({ id: "" });
 
-  useEffect(() => {
-    if (storeReady && (cache.status === "idle" || (cache.store !== store && cache.status !== "loading"))) void loadOrders(store);
-  }, [storeReady, store, cache.status, cache.store]);
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    return cache.orders.filter((o) =>
-      (!unfulfilledOnly || isOpenFulfillment(o)) && (!s || `${o.name} ${o.customerName ?? ""} ${o.customerEmail ?? ""}`.toLowerCase().includes(s)));
-  }, [cache.orders, q, unfulfilledOnly]);
-
-  // Selection lives in ?sel=<gid> so the ⌘K palette can deep-link; default to the first visible row.
+  // Selection lives in ?sel=<gid> so the ⌘K palette can deep-link; default to the first row of the page.
   const selParam = params.get("sel");
-  const selOrder = selParam ? cache.orders.find((o) => o.id === selParam) : undefined;
-  const selectedId = selOrder?.id ?? filtered[0]?.id ?? null;
+  const inPage = !!selParam && tbl.orders.some((o) => o.id === selParam);
+  const recentSel = selParam ? recent.orders.find((o) => o.id === selParam) : undefined;
+  const selectedId = selParam && (inPage || recentSel) ? selParam : tbl.orders[0]?.id ?? null;
   const select = (id: string) => setParams({ sel: id }, { replace: true });
-  useEffect(() => { if (selOrder && !isOpenFulfillment(selOrder)) setUnfulfilledOnly(false); }, [selOrder]);
 
+  const columns = useMemo(() => orderColumns(selectedId), [selectedId]);
+  const table = useTable<Order>({
+    id: "orders", columns, defaultSort: DEFAULT_SORT, pageSizes: ORDER_PAGE_SIZES, defaultPageSize: ORDER_DEFAULT_PAGE_SIZE,
+    initialFilters: { fulfillment: [...OPEN_WORK_STATUSES] },
+  });
+  const unfulfilledOnly = sameSet(table.filters.fulfillment, OPEN_WORK_STATUSES);
+  const toggleUnfulfilled = () => table.setFilter("fulfillment", unfulfilledOnly ? null : [...OPEN_WORK_STATUSES]);
+  // A deep link to a fulfilled/closed order widens the view so its row can show.
+  useEffect(() => { if (recentSel && !isOpenFulfillment(recentSel) && unfulfilledOnly) table.setFilter("fulfillment", null); }, [recentSel]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Everything Shopify needs for the page; text is debounced so typing doesn't fire a request per keystroke.
+  const query = useDebounced(buildOrdersQuery({
+    text: q, name: str(table.filters.order), customer: str(table.filters.customer),
+    financial: arr(table.filters.payment), fulfillment: arr(table.filters.fulfillment), openOnly: unfulfilledOnly,
+  }), 300);
+  const sort = table.sort ?? DEFAULT_SORT;
+  const request = useMemo<OrdersRequest>(() => ({
+    pageSize: table.pageSize, sortKey: SORT_KEYS[sort.id] ?? "CREATED_AT", reverse: sort.dir === "desc", query,
+  }), [table.pageSize, sort.id, sort.dir, query]);
+
+  // Store / sort / filter / page-size changes go back to page 1; invalidation (⌘R) refetches the current page.
+  useEffect(() => { if (storeReady) ensureOrdersPage(store, request); }, [storeReady, store, request, tbl.status]);
+
+  const [detail, setDetail] = useState<{ id: string; data?: OrderDetail; error?: string }>({ id: "" });
   useEffect(() => {
     if (!selectedId) { setDetail({ id: "" }); return; }
     let alive = true;
@@ -46,42 +100,52 @@ export function Orders() {
     return () => { alive = false; };
   }, [selectedId]);
 
+  const loading = tbl.status === "loading";
+  const canPrev = tbl.page > 1 && !loading;
+  const canNext = tbl.hasNextPage && !loading;
+  const prev = useCallback(() => { if (canPrev) goToOrdersPage(tbl.page - 1); }, [canPrev, tbl.page]);
+  const next = useCallback(() => { if (canNext) goToOrdersPage(tbl.page + 1); }, [canNext, tbl.page]);
+
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "ArrowLeft") { e.preventDefault(); prev(); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); next(); return; }
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
     e.preventDefault();
-    const i = filtered.findIndex((o) => o.id === selectedId);
-    const next = filtered[Math.min(filtered.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
-    if (next) select(next.id);
+    const rows = tbl.orders;
+    const i = rows.findIndex((o) => o.id === selectedId);
+    const to = rows[Math.min(rows.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))];
+    if (to) select(to.id);
   };
 
+  // Honest counts: Shopify's ordersCount for this exact query (AT_LEAST past 10,000), else just "more available".
+  const size = request.pageSize;
+  const first = (tbl.page - 1) * size + 1, last = (tbl.page - 1) * size + tbl.orders.length;
+  const total = tbl.total;
+  const totalLabel = total ? `${nf.format(total.count)}${total.precision === "AT_LEAST" ? "+" : ""}` : null;
+  const pageCount = total ? Math.max(tbl.page, Math.ceil(total.count / size)) : null;
+  const rangeLabel = tbl.status !== "data" && tbl.orders.length === 0 ? "" :
+    totalLabel ? `${nf.format(first)}–${nf.format(last)} of ${totalLabel}` : `${nf.format(first)}–${nf.format(last)}${tbl.hasNextPage ? " · more available" : ""}`;
+
+  const clearAll = () => { setQ(""); table.clearFilters(); };
+
   let body;
-  if (cache.status === "loading" || cache.status === "idle") body = <LoadingState label="Loading orders from Shopify…" />;
-  else if (cache.status === "error") body = (
-    <ErrorState title="Couldn’t reach Shopify" why={(cache.error ?? "Unknown error").slice(0, 160)} actions={<>
-      <button className="btn btn-primary" onClick={() => void loadOrders(store, true)}>Retry</button>
+  if (tbl.status === "idle" || (loading && (tbl.orders.length === 0 || tbl.store !== store))) body = <LoadingState label="Loading orders from Shopify…" />;
+  else if (tbl.status === "error") body = (
+    <ErrorState title="Couldn’t reach Shopify" why={(tbl.error ?? "Unknown error").slice(0, 160)} actions={<>
+      <button className="btn btn-primary" onClick={() => void loadOrdersPage(store, request, tbl.page)}>Retry</button>
       <button className="btn btn-secondary" onClick={() => navigate("/settings")}>Open settings</button>
     </>} />
   );
-  else if (filtered.length === 0) body = (
-    <EmptyState title="No orders match" why="Try widening the date range or clearing the Unfulfilled filter."
-      action={<button className="btn btn-secondary" onClick={() => { setQ(""); setUnfulfilledOnly(false); }}>Clear filters</button>} />
+  else if (tbl.orders.length === 0) body = (
+    <EmptyState title="No orders match" why={request.query ? "Try a broader search or clear the filters." : `${storeById(store).label} has no orders yet.`}
+      action={request.query ? <button className="btn btn-secondary" onClick={clearAll}>Clear filters</button> : undefined} />
   );
   else body = (
-    <div className="scroll" tabIndex={0} onKeyDown={onKey}>
-      {filtered.map((o, i) => {
-        const pay = payStatus(o.displayFinancialStatus), ful = fulStatus(o.displayFulfillmentStatus), on = o.id === selectedId;
-        return (
-          <div key={o.id} className={`row stagger cols-orders${on ? " selected" : ""}`} style={{ animationDelay: `${Math.min(i, 14) * 22}ms` }} onClick={() => select(o.id)}>
-            <span><span className={`check${on ? " on" : ""}`} /></span>
-            <span style={{ fontWeight: 500 }}>{o.name}</span>
-            <span className="sub">{fmtCreated(o.createdAt)}</span>
-            <span className="ellip">{o.customerName ?? o.customerEmail ?? "—"}</span>
-            <span className="r">{money(o.totalPrice)}</span>
-            <span><Pill kind={pay.kind}>{pay.label}</Pill></span>
-            <span><Pill kind={ful.kind}>{ful.label}</Pill></span>
-          </div>
-        );
-      })}
+    <div className={`scroll${loading ? " rows-dim" : ""}`} tabIndex={0} onKeyDown={onKey} aria-busy={loading}>
+      {tbl.orders.map((o, i) => (
+        <TableRow key={o.id} table={table} row={o} className={`stagger${o.id === selectedId ? " selected" : ""}`}
+          style={{ animationDelay: `${Math.min(i, 14) * 22}ms` }} onClick={() => select(o.id)} />
+      ))}
     </div>
   );
 
@@ -89,21 +153,30 @@ export function Orders() {
     <section className="screen screen-full">
       <div className="orders">
         <div className="orders-list">
-          <div className="toolbar">
-            <input className="input" style={{ width: 280 }} placeholder="Search orders, customers, SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button className="btn btn-control">Status <span className="muted">All</span></button>
-            <button className="btn btn-control">Date <span className="muted">Last 30 days</span></button>
-            <button className={`btn btn-control${unfulfilledOnly ? " on" : ""}`} onClick={() => setUnfulfilledOnly((v) => !v)}>
+          <div className="toolbar" style={{ flexWrap: "wrap" }}>
+            <input className="input" style={{ width: 240 }} placeholder="Search orders and customers" value={q} onChange={(e) => setQ(e.target.value)} />
+            <button className={`btn btn-control${unfulfilledOnly ? " on" : ""}`} title="Open orders that still need fulfillment (unfulfilled, partial, on hold, scheduled)" onClick={toggleUnfulfilled}>
               Unfulfilled {unfulfilledOnly && <span className="sub">×</span>}
             </button>
+            <FilterChips table={table} exclude={unfulfilledOnly ? ["fulfillment"] : []} />
             <div className="spacer" />
-            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{filtered.length} orders</span>
+            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+              {totalLabel ? `${totalLabel} orders` : tbl.status === "data" ? `${tbl.orders.length} on this page` : ""}
+            </span>
+            <ColumnsMenu table={table} />
             <button className="btn btn-control" onClick={refresh}>Refresh</button>
           </div>
-          <div className="thead sticky cols-orders">
-            <span><span className="check" /></span><span>Order</span><span>Created</span><span>Customer</span><span className="r">Total</span><span>Payment</span><span>Fulfillment</span>
-          </div>
+          <TableHead table={table} sticky />
           {body}
+          <div className="table-foot">
+            <span className="num">{rangeLabel}</span>
+            <div className="spacer" />
+            <span className="mute">Rows</span>
+            <PageSizePicker table={table} />
+            <button className="btn btn-control btn-sm" disabled={!canPrev} onClick={prev} aria-label="Previous page">‹ Prev</button>
+            <span className="page num">Page {nf.format(tbl.page)}{pageCount ? ` of ${nf.format(pageCount)}${total?.precision === "AT_LEAST" ? "+" : ""}` : ""}</span>
+            <button className="btn btn-control btn-sm" disabled={!canNext} onClick={next} aria-label="Next page">Next ›</button>
+          </div>
         </div>
         <Detail store={store} id={detail.id} data={detail.data} error={detail.error} />
       </div>

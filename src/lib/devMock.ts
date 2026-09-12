@@ -1,7 +1,7 @@
 // Browser-preview shim: when `npm run dev` is opened in a plain browser (no Tauri runtime),
 // answer Tauri `invoke` calls with the design's sample orders so the UI can be reviewed.
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
-import type { CatalogProduct, CatalogResult, InventoryResult, InventoryVariant, Order, OrderDetail } from "./shopify";
+import type { CatalogProduct, CatalogResult, InventoryResult, InventoryVariant, Order, OrderDetail, OrdersPage } from "./shopify";
 
 const STORES = [
   { id: "retail", label: "Retail", domain: "3wvfyr-1i.myshopify.com" },
@@ -28,20 +28,89 @@ const RAW: Raw[] = [
   ["#R-10475", 98, "Grace Whitfield", 88, "PAID", "FULFILLED", "web", "gwhitfield@gmail.com", 2, "Grace Whitfield\n120 Ocean Dr\nNewport, OR 97365", [["Hawaiian Haze · 14g", "FG-HH-14G", 1, 68], ["Cherry Blossom · pre-roll", "FG-CHB-PR1", 2, 10]], null],
 ];
 const usd = (n: number) => `${n.toFixed(2)} USD`;
-const orders: Order[] = RAW.map((o, i) => ({
-  id: `gid://shopify/Order/${10000 + i}`, name: o[0], createdAt: hoursAgo(o[1]), displayFinancialStatus: o[4], displayFulfillmentStatus: o[5],
-  totalPrice: usd(o[3]), customerName: o[2], customerEmail: o[7], closed: o[5] === "FULFILLED", cancelled: false,
-}));
+// The design's 13 sample orders plus ~130 older ones spun from the same templates, so the Orders table has
+// several pages to page through in the browser preview. Older orders are mostly fulfilled and paid.
+const EXTRA = 130;
+const OLD_FIN = ["PAID", "PAID", "PAID", "PAID", "PENDING", "PAID", "PARTIALLY_REFUNDED", "PAID", "REFUNDED", "PAID", "AUTHORIZED"];
+const OLD_FUL = ["FULFILLED", "FULFILLED", "FULFILLED", "UNFULFILLED", "FULFILLED", "PARTIALLY_FULFILLED", "FULFILLED", "FULFILLED", "ON_HOLD", "FULFILLED", "SCHEDULED", "FULFILLED"];
+const EXTRA_NAMES: [string, string][] = [
+  ["Jonah Feld", "jonah.feld@gmail.com"], ["Rosa Delgado", "rosa.d@icloud.com"], ["Alder & Ash Apothecary", "orders@alderash.co"], ["Kenji Watanabe", "kenji.w@me.com"],
+  ["Blue Heron Farms", "buying@blueheronfarms.com"], ["Talia Brooks", "talia.brooks@outlook.com"], ["Summit Hemp Supply", "po@summithemp.com"], ["Ines Moreau", "ines.moreau@proton.me"],
+];
+const ORDER_SEED = RAW.length;
+const template = (i: number) => RAW[i % RAW.length];
+const orders: Order[] = [
+  ...RAW.map((o, i): Order => ({
+    id: `gid://shopify/Order/${10000 + i}`, name: o[0], createdAt: hoursAgo(o[1]), displayFinancialStatus: o[4], displayFulfillmentStatus: o[5],
+    totalPrice: usd(o[3]), customerName: o[2], customerEmail: o[7], closed: o[5] === "FULFILLED", cancelled: false,
+  })),
+  ...Array.from({ length: EXTRA }, (_, k): Order => {
+    const i = ORDER_SEED + k, t = template(i);
+    const [prefix, num] = t[0].slice(1).split("-");
+    const fin = OLD_FIN[k % OLD_FIN.length], ful = OLD_FUL[k % OLD_FUL.length];
+    const [customerName, customerEmail] = k % 3 === 0 ? EXTRA_NAMES[k % EXTRA_NAMES.length] : [t[2], t[7]];
+    return {
+      id: `gid://shopify/Order/${10000 + i}`, name: `#${prefix}-${String(Number(num) - 20 - k).padStart(num.length, "0")}`,
+      createdAt: hoursAgo(120 + k * 9.7 + (k % 5) * 1.3), displayFinancialStatus: fin, displayFulfillmentStatus: ful,
+      totalPrice: usd(Math.round(t[3] * (0.6 + ((k * 7) % 9) / 10))), customerName, customerEmail,
+      closed: ful === "FULFILLED" || fin === "REFUNDED", cancelled: fin === "REFUNDED" && k % 2 === 0,
+    };
+  }),
+];
 const detail = (id: string): OrderDetail => {
   const i = orders.findIndex((o) => o.id === id);
-  const o = RAW[i];
+  if (i < 0) throw new Error("Order not found");
+  const o = template(i);
   const subtotal = o[10].reduce((a, li) => a + li[2] * li[3], 0);
   return {
     ...orders[i], subtotalPrice: usd(subtotal), totalTax: usd(0), totalShipping: usd(Math.max(0, o[3] - subtotal)), note: o[11],
-    shippingAddress: o[9], customerOrdersCount: o[8], channel: o[6],
+    shippingAddress: i < ORDER_SEED ? o[9] : `${orders[i].customerName}\n${o[9].split("\n").slice(1).join("\n")}`, customerOrdersCount: o[8], channel: o[6],
     lineItems: o[10].map((li) => ({ title: li[0], sku: li[1], quantity: li[2], price: usd(li[3]) })),
   };
 };
+const storeOrders = () => (active === "retail" ? orders : orders.filter((o) => (active === "b2b" ? o.name.startsWith("#W") : o.name.startsWith("#B"))));
+
+// Enough of Shopify's search syntax for what buildOrdersQuery() emits: `status:open`, `name:x`, free words,
+// and `field:v` / `(field:a OR field:b)` groups for financial_status / fulfillment_status.
+const FIN_ENUM: Record<string, string> = { paid: "PAID", pending: "PENDING", authorized: "AUTHORIZED", partially_paid: "PARTIALLY_PAID", partially_refunded: "PARTIALLY_REFUNDED", refunded: "REFUNDED", voided: "VOIDED", expired: "EXPIRED" };
+const FUL_ENUM: Record<string, string> = { unfulfilled: "UNFULFILLED", partial: "PARTIALLY_FULFILLED", fulfilled: "FULFILLED", scheduled: "SCHEDULED", on_hold: "ON_HOLD", request_declined: "REQUEST_DECLINED" };
+function matchesQuery(o: Order, query: string): boolean {
+  const unescape = (s: string) => s.replace(/\\(.)/g, "$1").toLowerCase();
+  const term = (t: string): boolean => {
+    const m = /^([a-z_]+):(.+)$/.exec(t);
+    if (!m) return `${o.name} ${o.customerName ?? ""} ${o.customerEmail ?? ""}`.toLowerCase().includes(unescape(t));
+    const [, field, raw] = m, v = unescape(raw);
+    switch (field) {
+      case "status": return v === "open" ? !o.closed && !o.cancelled : v === "closed" ? !!o.closed : v === "cancelled" ? !!o.cancelled : true;
+      case "name": return o.name.toLowerCase().replace(/^#/, "").includes(v.replace(/^#/, ""));
+      case "financial_status": return o.displayFinancialStatus === FIN_ENUM[v];
+      case "fulfillment_status": return o.displayFulfillmentStatus === FUL_ENUM[v];
+      default: return true;
+    }
+  };
+  const groups: string[][] = [];
+  const rest = query.replace(/\(([^)]*)\)/g, (_, g: string) => { groups.push(g.split(/\s+OR\s+/)); return " "; });
+  return groups.every((g) => g.some(term)) && rest.split(/\s+/).filter(Boolean).every(term);
+}
+const SORT_GET: Record<string, (o: Order) => string | number> = {
+  CREATED_AT: (o) => o.createdAt, UPDATED_AT: (o) => o.createdAt, PROCESSED_AT: (o) => o.createdAt,
+  ORDER_NUMBER: (o) => Number(o.name.replace(/\D/g, "")), CUSTOMER_NAME: (o) => (o.customerName ?? "").toLowerCase(),
+  TOTAL_PRICE: (o) => Number(o.totalPrice.split(" ")[0]), FINANCIAL_STATUS: (o) => o.displayFinancialStatus ?? "", FULFILLMENT_STATUS: (o) => o.displayFulfillmentStatus ?? "",
+};
+function ordersPage(args: Record<string, unknown>): OrdersPage {
+  const first = Math.min(200, Math.max(1, Number(args.first ?? 50)));
+  const get = SORT_GET[String(args.sortKey ?? "CREATED_AT")] ?? SORT_GET.CREATED_AT;
+  const dir = args.reverse === false ? 1 : -1;
+  const q = typeof args.query === "string" ? args.query.trim() : "";
+  const rows = storeOrders().filter((o) => !q || matchesQuery(o, q))
+    .sort((a, b) => { const x = get(a), y = get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
+  const start = typeof args.after === "string" && args.after ? Number(atob(args.after)) || 0 : 0; // cursor = base64 row offset
+  const page = rows.slice(start, start + first);
+  return {
+    orders: page, hasNextPage: start + page.length < rows.length, hasPreviousPage: start > 0,
+    endCursor: page.length ? btoa(String(start + page.length)) : null, totalCount: rows.length, totalPrecision: "EXACT",
+  };
+}
 
 // Inventory sample: [product, variant, sku, status, tracked, warehouse, retail floor, committed]
 const INV_LOCS = ["Warehouse", "Retail floor"];
@@ -100,7 +169,7 @@ const catalog = (): CatalogResult => ({
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  await wait(cmd === "list_orders" ? 500 : cmd === "list_inventory" || cmd === "list_products" ? 400 : 180);
+  await wait(cmd === "list_orders" || cmd === "list_orders_page" ? 500 : cmd === "list_inventory" || cmd === "list_products" ? 400 : 180);
   if (cmd === "plugin:opener|open_url") { window.open(String(args.url), "_blank"); return null; }
   switch (cmd) {
     case "ping": return "Flow Command is running ✓ (browser mock)";
@@ -110,7 +179,8 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "get_shopify_credentials": return { clientId: "a1f3mockclientc9e2", clientSecret: "mock" };
     case "save_shopify_credentials": return "Credentials saved (browser mock — nothing stored)";
     case "fetch_shop_info": { const s = STORES.find((x) => x.id === (args.storeId ?? active))!; return { shopName: `Flow Gardens ${s.label}`, status: "Connected ✓", shopDomain: s.domain }; }
-    case "list_orders": return active === "retail" ? orders : orders.filter((o) => (active === "b2b" ? o.name.startsWith("#W") : o.name.startsWith("#B")));
+    case "list_orders": return ordersPage({ first: args.first ?? 50 }).orders;
+    case "list_orders_page": return ordersPage(args);
     case "get_order": return detail(String(args.orderId));
     case "list_inventory": return inventory();
     case "list_products": return catalog();

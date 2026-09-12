@@ -79,6 +79,21 @@ pub struct Order {
     pub cancelled: bool,
 }
 
+/// One page of the orders connection plus the (cheap) filtered count, so the UI can page honestly.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrdersPage {
+    pub orders: Vec<Order>,
+    pub has_next_page: bool,
+    pub has_previous_page: bool,
+    /// Cursor of the last edge; pass back as `after` to fetch the next page.
+    pub end_cursor: Option<String>,
+    /// `ordersCount(query, limit: 10000)`; None when Shopify did not return it.
+    pub total_count: Option<i64>,
+    /// EXACT, or AT_LEAST once the count hits the 10,000 limit.
+    pub total_precision: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrderDetail {
@@ -374,13 +389,26 @@ async fn fetch_shopify_token(shop_domain: String) -> Result<String, String> {
     fetch_new_token(&shop_domain).await
 }
 
-// GraphQL helper
+// GraphQL helper (no variables)
 async fn graphql_query(shop_domain: &str, query: &str) -> Result<serde_json::Value, String> {
+    graphql_request(shop_domain, query, None).await
+}
+
+// GraphQL helper; `variables` lets user-supplied strings (search text, cursors) travel as JSON
+// instead of being spliced into the query document.
+async fn graphql_request(
+    shop_domain: &str,
+    query: &str,
+    variables: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
     let token = get_cached_token(shop_domain).await?;
     let client = reqwest::Client::new();
     let graphql_url = format!("https://{}/admin/api/2026-01/graphql.json", shop_domain);
 
-    let body = serde_json::json!({ "query": query });
+    let body = match variables {
+        Some(vars) => serde_json::json!({ "query": query, "variables": vars }),
+        None => serde_json::json!({ "query": query }),
+    };
 
     let response = client
         .post(&graphql_url)
@@ -461,78 +489,164 @@ async fn fetch_shop_info(store_id: Option<String>) -> Result<ShopInfo, String> {
     })
 }
 
-// List orders for active store
+// Each order node costs 4 points (Order + MoneyBag + MoneyV2 + Customer), so a 200-row page is
+// 2 + 200×4 + 1 (ordersCount) = 803 — under Shopify's 1,000-point single-query cap. 250 would not be.
+const ORDERS_MAX_PAGE_SIZE: i32 = 200;
+const ORDERS_DEFAULT_PAGE_SIZE: i32 = 50;
+/// `ordersCount` refuses to count past this; the UI shows "10,000+" when precision is AT_LEAST.
+const ORDERS_COUNT_LIMIT: i32 = 10_000;
+/// Subset of `OrderSortKeys` the Orders table exposes; anything else is rejected before it reaches Shopify.
+const ORDER_SORT_KEYS: [&str; 8] = [
+    "CREATED_AT",
+    "UPDATED_AT",
+    "PROCESSED_AT",
+    "ORDER_NUMBER",
+    "CUSTOMER_NAME",
+    "TOTAL_PRICE",
+    "FINANCIAL_STATUS",
+    "FULFILLMENT_STATUS",
+];
+
+const ORDERS_PAGE_QUERY: &str = r#"
+query OrdersPage($first: Int!, $after: String, $sortKey: OrderSortKeys, $reverse: Boolean, $query: String, $countLimit: Int) {
+    orders(first: $first, after: $after, sortKey: $sortKey, reverse: $reverse, query: $query) {
+        pageInfo { hasNextPage hasPreviousPage endCursor }
+        edges {
+            node {
+                id
+                name
+                createdAt
+                displayFinancialStatus
+                displayFulfillmentStatus
+                closed
+                cancelledAt
+                totalPriceSet { shopMoney { amount currencyCode } }
+                customer { displayName email }
+            }
+        }
+    }
+    ordersCount(query: $query, limit: $countLimit) { count precision }
+}
+"#;
+
+fn parse_orders(result: &serde_json::Value) -> Vec<Order> {
+    result["data"]["orders"]["edges"]
+        .as_array()
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|edge| {
+                    let node = &edge["node"];
+                    Some(Order {
+                        id: node["id"].as_str()?.to_string(),
+                        name: node["name"].as_str()?.to_string(),
+                        created_at: node["createdAt"].as_str()?.to_string(),
+                        display_financial_status: node["displayFinancialStatus"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                        display_fulfillment_status: node["displayFulfillmentStatus"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                        total_price: format!(
+                            "{} {}",
+                            node["totalPriceSet"]["shopMoney"]["amount"].as_str()?,
+                            node["totalPriceSet"]["shopMoney"]["currencyCode"].as_str()?
+                        ),
+                        customer_name: node["customer"]["displayName"]
+                            .as_str()
+                            .map(|s| s.to_string()),
+                        customer_email: node["customer"]["email"].as_str().map(|s| s.to_string()),
+                        closed: node["closed"].as_bool().unwrap_or(false),
+                        cancelled: !node["cancelledAt"].is_null(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn parse_orders_page(result: &serde_json::Value) -> Result<OrdersPage, String> {
+    if !result["data"]["orders"]["edges"].is_array() {
+        return Err("Invalid orders response".to_string());
+    }
+    let info = &result["data"]["orders"]["pageInfo"];
+    let count = &result["data"]["ordersCount"];
+    Ok(OrdersPage {
+        orders: parse_orders(result),
+        has_next_page: info["hasNextPage"].as_bool().unwrap_or(false),
+        has_previous_page: info["hasPreviousPage"].as_bool().unwrap_or(false),
+        end_cursor: info["endCursor"].as_str().map(String::from),
+        total_count: count["count"].as_i64(),
+        total_precision: count["precision"].as_str().map(String::from),
+    })
+}
+
+/// Normalises the page-size / sort arguments shared by both orders commands.
+fn orders_page_args(
+    first: Option<i32>,
+    sort_key: Option<&str>,
+    reverse: Option<bool>,
+) -> Result<(i32, String, bool), String> {
+    let first = first.unwrap_or(ORDERS_DEFAULT_PAGE_SIZE).clamp(1, ORDERS_MAX_PAGE_SIZE);
+    let sort_key = sort_key.unwrap_or("CREATED_AT");
+    if !ORDER_SORT_KEYS.contains(&sort_key) {
+        return Err(format!("Unsupported order sort key: {sort_key}"));
+    }
+    Ok((first, sort_key.to_string(), reverse.unwrap_or(true)))
+}
+
+async fn fetch_orders_page(
+    shop_domain: &str,
+    first: i32,
+    after: Option<&str>,
+    sort_key: &str,
+    reverse: bool,
+    query: Option<&str>,
+) -> Result<OrdersPage, String> {
+    let query = query.map(str::trim).filter(|q| !q.is_empty());
+    let variables = serde_json::json!({
+        "first": first,
+        "after": after,
+        "sortKey": sort_key,
+        "reverse": reverse,
+        "query": query,
+        "countLimit": ORDERS_COUNT_LIMIT,
+    });
+    let result = graphql_request(shop_domain, ORDERS_PAGE_QUERY, Some(variables)).await?;
+    parse_orders_page(&result)
+}
+
+// Most recent orders for the active store (Home KPIs, sidebar badge, ⌘K search).
 #[tauri::command]
 async fn list_orders(first: Option<i32>) -> Result<Vec<Order>, String> {
-    let active = get_active_store()?;
-    let shop_domain = active.domain;
-    let count = first.unwrap_or(25).min(100);
+    let shop_domain = get_active_store()?.domain;
+    let (first, sort_key, reverse) = orders_page_args(first, None, None)?;
+    Ok(fetch_orders_page(&shop_domain, first, None, &sort_key, reverse, None)
+        .await?
+        .orders)
+}
 
-    let query = format!(
-        r#"
-        {{
-            orders(first: {}, sortKey: CREATED_AT, reverse: true) {{
-                edges {{
-                    node {{
-                        id
-                        name
-                        createdAt
-                        displayFinancialStatus
-                        displayFulfillmentStatus
-                        closed
-                        cancelledAt
-                        totalPriceSet {{
-                            shopMoney {{
-                                amount
-                                currencyCode
-                            }}
-                        }}
-                        customer {{
-                            displayName
-                            email
-                        }}
-                    }}
-                }}
-            }}
-        }}
-        "#,
-        count
-    );
-
-    let result = graphql_query(&shop_domain, &query).await?;
-
-    let orders: Vec<Order> = result["data"]["orders"]["edges"]
-        .as_array()
-        .ok_or("Invalid orders response")?
-        .iter()
-        .filter_map(|edge| {
-            let node = &edge["node"];
-            Some(Order {
-                id: node["id"].as_str()?.to_string(),
-                name: node["name"].as_str()?.to_string(),
-                created_at: node["createdAt"].as_str()?.to_string(),
-                display_financial_status: node["displayFinancialStatus"]
-                    .as_str()
-                    .map(|s| s.to_string()),
-                display_fulfillment_status: node["displayFulfillmentStatus"]
-                    .as_str()
-                    .map(|s| s.to_string()),
-                total_price: format!(
-                    "{} {}",
-                    node["totalPriceSet"]["shopMoney"]["amount"].as_str()?,
-                    node["totalPriceSet"]["shopMoney"]["currencyCode"].as_str()?
-                ),
-                customer_name: node["customer"]["displayName"]
-                    .as_str()
-                    .map(|s| s.to_string()),
-                customer_email: node["customer"]["email"].as_str().map(|s| s.to_string()),
-                closed: node["closed"].as_bool().unwrap_or(false),
-                cancelled: !node["cancelledAt"].is_null(),
-            })
-        })
-        .collect();
-
-    Ok(orders)
+// One page of orders for the Orders table: cursor pagination, page size (≤200), Shopify sort key
+// and search-syntax `query` (e.g. "status:open fulfillment_status:unfulfilled Ortega").
+#[tauri::command]
+async fn list_orders_page(
+    first: Option<i32>,
+    after: Option<String>,
+    sort_key: Option<String>,
+    reverse: Option<bool>,
+    query: Option<String>,
+) -> Result<OrdersPage, String> {
+    let shop_domain = get_active_store()?.domain;
+    let (first, sort_key, reverse) = orders_page_args(first, sort_key.as_deref(), reverse)?;
+    fetch_orders_page(
+        &shop_domain,
+        first,
+        after.as_deref().filter(|c| !c.is_empty()),
+        &sort_key,
+        reverse,
+        query.as_deref(),
+    )
+    .await
 }
 
 // Get single order with line items (using GID)
@@ -957,6 +1071,7 @@ pub fn run() {
             fetch_shopify_token,
             fetch_shop_info,
             list_orders,
+            list_orders_page,
             get_order,
             list_inventory,
             list_products
@@ -1070,5 +1185,73 @@ mod tests {
         assert!(catalog_query(None).contains("after: null"));
         assert!(catalog_query(Some("abc")).contains("after: \"abc\""));
         assert!(catalog_query(None).contains("options(first: 3)"));
+    }
+
+    #[test]
+    fn parse_orders_page_maps_fixture() {
+        let page = serde_json::json!({"data": {
+            "orders": {
+                "pageInfo": {"hasNextPage": true, "hasPreviousPage": false, "endCursor": "eyJsYXN0X2lkIjoxfQ=="},
+                "edges": [
+                    {"cursor": "a", "node": {
+                        "id": "gid://shopify/Order/1", "name": "#R-10482", "createdAt": "2026-09-12T09:41:00Z",
+                        "displayFinancialStatus": "PAID", "displayFulfillmentStatus": "UNFULFILLED",
+                        "closed": false, "cancelledAt": null,
+                        "totalPriceSet": {"shopMoney": {"amount": "128.0", "currencyCode": "USD"}},
+                        "customer": {"displayName": "Marisol Ortega", "email": "marisol.o@gmail.com"}
+                    }},
+                    {"cursor": "b", "node": {
+                        "id": "gid://shopify/Order/2", "name": "#R-10479", "createdAt": "2026-09-11T06:00:00Z",
+                        "displayFinancialStatus": "REFUNDED", "displayFulfillmentStatus": "UNFULFILLED",
+                        "closed": true, "cancelledAt": "2026-09-11T07:00:00Z",
+                        "totalPriceSet": {"shopMoney": {"amount": "42.0", "currencyCode": "USD"}},
+                        "customer": null
+                    }}
+                ]
+            },
+            "ordersCount": {"count": 312, "precision": "EXACT"}
+        }});
+
+        let p = parse_orders_page(&page).expect("page parses");
+        assert_eq!(p.orders.len(), 2);
+        assert!(p.has_next_page);
+        assert!(!p.has_previous_page);
+        assert_eq!(p.end_cursor.as_deref(), Some("eyJsYXN0X2lkIjoxfQ=="));
+        assert_eq!(p.total_count, Some(312));
+        assert_eq!(p.total_precision.as_deref(), Some("EXACT"));
+
+        assert_eq!(p.orders[0].name, "#R-10482");
+        assert_eq!(p.orders[0].total_price, "128.0 USD");
+        assert_eq!(p.orders[0].customer_name.as_deref(), Some("Marisol Ortega"));
+        assert!(!p.orders[0].closed && !p.orders[0].cancelled);
+
+        assert_eq!(p.orders[1].customer_name, None);
+        assert_eq!(p.orders[1].customer_email, None);
+        assert!(p.orders[1].closed && p.orders[1].cancelled);
+    }
+
+    #[test]
+    fn parse_orders_page_tolerates_missing_count_and_rejects_bad_shape() {
+        let page = serde_json::json!({"data": {"orders": {"pageInfo": {"hasNextPage": false}, "edges": []}}});
+        let p = parse_orders_page(&page).expect("page parses");
+        assert!(p.orders.is_empty());
+        assert!(!p.has_next_page);
+        assert_eq!(p.end_cursor, None);
+        assert_eq!(p.total_count, None);
+
+        assert!(parse_orders_page(&serde_json::json!({"data": {"orders": null}})).is_err());
+    }
+
+    #[test]
+    fn orders_page_args_clamp_and_validate() {
+        assert_eq!(orders_page_args(None, None, None).unwrap(), (ORDERS_DEFAULT_PAGE_SIZE, "CREATED_AT".to_string(), true));
+        assert_eq!(orders_page_args(Some(0), None, None).unwrap().0, 1);
+        assert_eq!(orders_page_args(Some(9_999), None, None).unwrap().0, ORDERS_MAX_PAGE_SIZE);
+        assert_eq!(
+            orders_page_args(Some(25), Some("TOTAL_PRICE"), Some(false)).unwrap(),
+            (25, "TOTAL_PRICE".to_string(), false)
+        );
+        assert!(orders_page_args(None, Some("RELEVANCE"), None).is_err());
+        assert!(orders_page_args(None, Some("id) { x"), None).is_err());
     }
 }

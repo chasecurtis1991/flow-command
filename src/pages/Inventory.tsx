@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApp } from "../lib/app";
 import { coaColor, driftColor, lotsSummary, shopInv, useLots } from "../lib/mock";
 import { type InventoryVariant, type Kind, loadInventory, lowStock, storeById, useInventory } from "../lib/shopify";
+import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill, SampleData } from "../components/ui";
+import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/DataTable";
 
 // FGINV drift banner still derives from the design sample until FGINV has a backend.
 const drifted = shopInv.filter((v) => v.sync.startsWith("Drift"));
@@ -17,7 +19,34 @@ const statusPill = (v: InventoryVariant): { label: string; kind: Kind } => {
   if (v.productStatus === "ARCHIVED") return { label: "Archived", kind: "neutral" };
   return { label: titleCase(v.productStatus), kind: "neutral" };
 };
-const sum = (v: InventoryVariant, k: "onHand" | "committed") => (v.levels.length ? v.levels.reduce((a, l) => a + l[k], 0) : "—");
+/** Summed across locations; null when the products-only fallback ran (no per-location levels). */
+const sum = (v: InventoryVariant, k: "onHand" | "committed") => (v.levels.length ? v.levels.reduce((a, l) => a + l[k], 0) : null);
+const variantName = (v: InventoryVariant) => `${v.productTitle}${v.variantTitle != null ? ` · ${v.variantTitle}` : ""}`;
+
+const INVENTORY_COLUMNS: ColumnDef<InventoryVariant>[] = [
+  {
+    id: "variant", label: "Variant", width: "minmax(0, 1.4fr)", cellClass: "ellip", sortValue: variantName,
+    filter: { kind: "text", value: (v) => variantName(v), placeholder: "Product or variant" },
+    cell: (v) => <>
+      {v.productTitle}
+      {v.variantTitle != null && <span className="mute"> · {v.variantTitle}</span>}
+      {v.productStatus !== "ACTIVE" && <> <span className="tag-caps">{v.productStatus}</span></>}
+    </>,
+  },
+  { id: "sku", label: "SKU", width: "150px", cellClass: "sub mono", cellStyle: () => ({ fontSize: 12 }), sortValue: (v) => v.sku, filter: { kind: "text", value: (v) => v.sku ?? "", placeholder: "SKU" }, cell: (v) => v.sku ?? "—" },
+  { id: "onHand", label: "On hand", width: "110px", align: "right", sortValue: (v) => sum(v, "onHand"), sortDir: "desc", cell: (v) => sum(v, "onHand") ?? "—" },
+  { id: "committed", label: "Committed", width: "110px", align: "right", sortValue: (v) => sum(v, "committed"), sortDir: "desc", cell: (v) => sum(v, "committed") ?? "—" },
+  {
+    id: "available", label: "Available", width: "110px", align: "right", sortValue: (v) => v.available, sortDir: "desc",
+    cellStyle: (v) => ({ fontWeight: 500, color: lowStock(v) ? "var(--amber)" : "var(--text)" }), cell: (v) => v.available,
+  },
+  { id: "fginv", label: "FGINV", title: "FGINV counts arrive when the FGINV backend is wired", width: "90px", align: "right", cellClass: "sub", cell: () => "—" },
+  {
+    id: "status", label: "Status", width: "130px", sortValue: (v) => statusPill(v).label,
+    filter: { kind: "enum", value: (v) => statusPill(v).label },
+    cell: (v) => { const st = statusPill(v); return <Pill kind={st.kind}>{st.label}</Pill>; },
+  },
+];
 
 export function Inventory() {
   const navigate = useNavigate();
@@ -37,7 +66,11 @@ export function Inventory() {
   const s = q.trim().toLowerCase();
   const variants = inv.data?.variants ?? [];
   const locations = inv.data?.locations ?? [];
-  const rows = variants.filter((v) => (!lowOnly || lowStock(v)) && (!s || `${v.productTitle} ${v.variantTitle ?? ""} ${v.sku ?? ""}`.toLowerCase().includes(s)));
+  // Search + Low stock are the toolbar-wide pre-filters; column filters and sort apply on top.
+  const searched = useMemo(() => variants.filter((v) =>
+    (!lowOnly || lowStock(v)) && (!s || `${v.productTitle} ${v.variantTitle ?? ""} ${v.sku ?? ""}`.toLowerCase().includes(s))), [variants, lowOnly, s]);
+  const table = useTable<InventoryVariant>({ id: "inventory", columns: INVENTORY_COLUMNS, rows: searched });
+  const rows = table.rowsOut;
 
   const sync = () => {
     const t0 = performance.now();
@@ -56,27 +89,13 @@ export function Inventory() {
       <button className="btn btn-secondary" onClick={() => navigate("/settings")}>Open settings</button>
     </>} />
   );
-  else if (rows.length === 0) body = <EmptyState title="No variants match" why="Try another SKU or clear Low stock only." />;
+  else if (rows.length === 0) body = (
+    <EmptyState title="No variants match" why="Try another SKU, or clear Low stock only and the column filters."
+      action={<button className="btn btn-secondary" onClick={() => { setQ(""); setLowOnly(false); table.clearFilters(); }}>Clear filters</button>} />
+  );
   else body = (
     <div className="scroll">
-      {rows.map((v) => {
-        const st = statusPill(v);
-        return (
-          <div key={v.id} className="row cols-inv">
-            <span className="ellip">
-              {v.productTitle}
-              {v.variantTitle != null && <span className="mute"> · {v.variantTitle}</span>}
-              {v.productStatus !== "ACTIVE" && <> <span className="tag-caps">{v.productStatus}</span></>}
-            </span>
-            <span className="sub mono" style={{ fontSize: 12 }}>{v.sku ?? "—"}</span>
-            <span className="r">{sum(v, "onHand")}</span>
-            <span className="r">{sum(v, "committed")}</span>
-            <span className="r" style={{ fontWeight: 500, color: lowStock(v) ? "var(--amber)" : "var(--text)" }}>{v.available}</span>
-            <span className="r sub">—</span>
-            <span><Pill kind={st.kind}>{st.label}</Pill></span>
-          </div>
-        );
-      })}
+      {rows.map((v) => <TableRow key={v.id} table={table} row={v} />)}
     </div>
   );
 
@@ -96,12 +115,14 @@ export function Inventory() {
 
       {tab === "shopify" ? (
         <>
-          <div className="toolbar">
+          <div className="toolbar" style={{ flexWrap: "wrap" }}>
             <input className="input" style={{ width: 280 }} placeholder="Search variants or SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
             <button className="btn btn-control">Location <span className="muted">{locations.join(", ") || "All"}</span></button>
             <button className={`btn btn-control${lowOnly ? " on" : ""}`} onClick={() => setLowOnly((v) => !v)}>Low stock only</button>
+            <FilterChips table={table} />
             <div className="spacer" />
             <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{rows.length} variants</span>
+            <ColumnsMenu table={table} />
             <button className="btn btn-control" onClick={sync}>Sync now</button>
           </div>
           {inv.data?.levelsError && (
@@ -110,9 +131,7 @@ export function Inventory() {
             </div>
           )}
           {inv.data?.truncated && <div className="mute" style={{ fontSize: 12, padding: "0 24px 8px" }}>Showing the first 1,500 variants</div>}
-          <div className="thead cols-inv">
-            <span>Variant</span><span>SKU</span><span className="r">On hand</span><span className="r">Committed</span><span className="r">Available</span><span className="r">FGINV</span><span>Status</span>
-          </div>
+          <TableHead table={table} />
           {body}
         </>
       ) : (

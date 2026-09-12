@@ -295,13 +295,71 @@ input:focus-visible { outline: none; }
 .two-line > span { display: block; }
 .two-line .second { font-size: 11.5px; color: var(--mute); }
 
-.cols-orders { grid-template-columns: 28px 110px 130px minmax(0, 1fr) 100px 110px 120px; }
-.cols-inv { grid-template-columns: minmax(0, 1.4fr) 150px 110px 110px 110px 90px 130px; }
+/* Orders / Inventory / Catalog column templates are built by useTable() from the visible columns (see lib/table.ts). */
 .cols-lots { grid-template-columns: 120px minmax(0, 1fr) 110px 100px 100px 120px; }
-.cols-cat { grid-template-columns: 36px minmax(0, 1.4fr) 110px 90px 160px 80px 110px; }
 .cols-coa { grid-template-columns: minmax(0, 1.3fr) 130px 120px 90px 90px 120px minmax(0, 1fr) 110px; }
 .cols-cust { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 120px 90px 110px 130px; }
 .cols-items { grid-template-columns: minmax(0, 1fr) 44px 80px; }
+
+/* ---------- Table controls (components/DataTable.tsx) ---------- */
+.thead .th { position: relative; display: flex; align-items: center; gap: 2px; min-width: 0; height: 100%; }
+.thead .th.r { justify-content: flex-end; }
+.th-sort {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 22px; padding: 0 5px; margin: 0 -5px; border: 0; border-radius: 4px;
+  background: transparent; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer;
+}
+.th-sort:hover { color: var(--soft); background: rgba(255, 255, 255, 0.04); }
+.th.sorted .th-sort { color: var(--text); }
+.th .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.th-arrow { font-size: 10px; line-height: 1; color: var(--accent); }
+.th-filter {
+  width: 18px; height: 18px; flex: none; border: 0; border-radius: 4px; background: transparent; color: var(--mute);
+  display: grid; place-items: center; cursor: pointer; opacity: 0; transition: opacity 0.15s, background 0.18s, color 0.18s;
+}
+.th:hover .th-filter, .th-filter:focus-visible, .th-filter.on, .th-filter[aria-expanded="true"] { opacity: 1; }
+.th-filter:hover { color: var(--soft); background: rgba(255, 255, 255, 0.06); }
+.th-filter.on { color: var(--accent); background: var(--accent-soft); }
+.th[draggable="true"] { cursor: grab; }
+.th.dragging { opacity: 0.35; }
+.th.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+.th.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+.pop-anchor { position: relative; display: inline-flex; flex: none; }
+
+.popover {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; min-width: 200px; max-width: 320px; max-height: 340px; overflow: auto; padding: 6px;
+  border-radius: 10px; background: rgba(18, 20, 26, 0.96); backdrop-filter: blur(30px); border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 24px 60px -12px rgba(0, 0, 0, 0.85);
+  animation: fc-pop 0.22s var(--overshoot) both; text-align: left; cursor: default;
+  /* reset the header's uppercase mono typography */
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, sans-serif; font-size: 12.5px; font-weight: 400;
+  letter-spacing: normal; text-transform: none; color: var(--text);
+}
+.popover.right { left: auto; right: 0; }
+.th.r .popover { left: auto; right: 0; }
+.popover-title { font-size: 10.5px; color: var(--mute); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; font-family: var(--mono); padding: 6px 8px 4px; }
+.menu-row { display: flex; align-items: center; gap: 2px; }
+.menu-item {
+  display: flex; align-items: center; gap: 9px; height: 30px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--text); font-size: 12.5px; text-align: left; cursor: pointer; white-space: nowrap; min-width: 0;
+}
+.menu-item.grow, .menu-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.menu-item:hover:not(:disabled) { background: rgba(255, 255, 255, 0.06); }
+.menu-item:disabled { color: var(--mute); cursor: default; }
+.menu-item .check { flex: none; }
+.menu-sep { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 6px 4px; }
+.menu-foot { display: flex; align-items: center; gap: 6px; padding: 4px 4px 2px; }
+.icon-btn { width: 22px; height: 22px; flex: none; border: 0; border-radius: 5px; background: transparent; color: var(--sub); cursor: pointer; display: grid; place-items: center; font-size: 13px; line-height: 1; }
+.icon-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--text); }
+.icon-btn:disabled { color: var(--mute); opacity: 0.4; cursor: default; }
+
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 9px; border-radius: 7px; background: var(--accent-soft); color: var(--text); font-size: 12px; white-space: nowrap; flex: none; }
+.chip .k { color: var(--sub); }
+.chip .x { width: 18px; height: 18px; border: 0; border-radius: 4px; background: transparent; color: var(--sub); cursor: pointer; display: grid; place-items: center; font-size: 13px; line-height: 1; }
+.chip .x:hover { background: rgba(255, 255, 255, 0.12); color: var(--text); }
+
+.table-foot { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--hairline); flex: none; font-size: 12px; color: var(--sub); font-variant-numeric: tabular-nums; }
+.table-foot .page { min-width: 96px; text-align: center; color: var(--text); }
+.rows-dim { opacity: 0.45; pointer-events: none; transition: opacity 0.2s; }
 
 /* ---------- States ---------- */
 .state { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 24px; }
@@ -429,7 +487,7 @@ input:focus-visible { outline: none; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.15); }
 
 @media (prefers-reduced-motion: reduce) {
-  .screen, .row.stagger, .kpi, .act-row, .dialog, .toast, .title-text, .detail { animation-name: fc-fade; }
+  .screen, .row.stagger, .kpi, .act-row, .dialog, .toast, .title-text, .detail, .popover { animation-name: fc-fade; }
   .bar { animation: none; }
   .kpi:hover, .action-card:hover, .product-card:hover { transform: none; }
   button:active:not(:disabled) { transform: none; }

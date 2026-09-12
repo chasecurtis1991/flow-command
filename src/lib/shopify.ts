@@ -88,6 +88,142 @@ export function loadOrders(store: StoreId, force = false): Promise<OrdersState> 
 export const useOrders = () =>
   useSyncExternalStore((fn) => { subs.add(fn); return () => { subs.delete(fn); }; }, () => ordersState);
 
+// ---- paged orders (the Orders table; mirrors list_orders_page in lib.rs) ----
+// Shopify sort keys the table exposes (must stay in step with ORDER_SORT_KEYS in lib.rs).
+export type OrderSortKey = "CREATED_AT" | "UPDATED_AT" | "PROCESSED_AT" | "ORDER_NUMBER" | "CUSTOMER_NAME" | "TOTAL_PRICE" | "FINANCIAL_STATUS" | "FULFILLMENT_STATUS";
+/** 200 keeps a page at ~803 query-cost points (< Shopify's 1,000 single-query cap); 250 would exceed it. */
+export const ORDER_PAGE_SIZES = [25, 50, 100, 200] as const;
+export const ORDER_DEFAULT_PAGE_SIZE = 50;
+export interface OrdersRequest { pageSize: number; sortKey: OrderSortKey; reverse: boolean; query: string }
+export const sameRequest = (a: OrdersRequest, b: OrdersRequest) =>
+  a.pageSize === b.pageSize && a.sortKey === b.sortKey && a.reverse === b.reverse && a.query === b.query;
+
+export type CountPrecision = "EXACT" | "AT_LEAST";
+export interface OrdersPage {
+  orders: Order[];
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  endCursor: string | null;
+  totalCount: number | null;
+  totalPrecision: CountPrecision | null;
+}
+export interface OrdersTableState {
+  store: StoreId | null;
+  status: OrdersStatus;
+  error: string | null;
+  loadedAt: number;
+  request: OrdersRequest | null;
+  /** 1-based page currently shown (or loading). */
+  page: number;
+  /** cursors[i] is the `after` cursor that fetches page i+1; cursors[0] is null (first page). */
+  cursors: (string | null)[];
+  orders: Order[];
+  hasNextPage: boolean;
+  /** Shopify's ordersCount for the same query; AT_LEAST once it hits the 10,000 cap. Null if not returned. */
+  total: { count: number; precision: CountPrecision } | null;
+}
+const EMPTY_TABLE: OrdersTableState = { store: null, status: "idle", error: null, loadedAt: 0, request: null, page: 1, cursors: [null], orders: [], hasNextPage: false, total: null };
+let tblState: OrdersTableState = EMPTY_TABLE;
+let tblSeq = 0;
+const tblSubs = new Set<() => void>();
+const tblEmit = () => tblSubs.forEach((fn) => fn());
+
+/** Fetch one page for `store` + `request`. A different store/request always starts at page 1; otherwise `page` must
+ *  already have a known cursor (prev/next navigation). Never rejects; resolves with the resulting state. */
+export function loadOrdersPage(store: StoreId, request: OrdersRequest, page = 1): Promise<OrdersTableState> {
+  const fresh = !(tblState.store === store && tblState.request && sameRequest(tblState.request, request));
+  const cursors = fresh ? [null] : tblState.cursors;
+  const target = fresh ? 1 : Math.max(1, Math.min(page, cursors.length));
+  const after = cursors[target - 1] ?? null;
+  const seq = ++tblSeq;
+  tblState = {
+    ...tblState, store, request, status: "loading", error: null, page: target, cursors,
+    orders: fresh ? [] : tblState.orders, hasNextPage: fresh ? false : tblState.hasNextPage, total: fresh ? null : tblState.total,
+  };
+  tblEmit();
+  return invoke<OrdersPage>("list_orders_page", { first: request.pageSize, after, sortKey: request.sortKey, reverse: request.reverse, query: request.query || null })
+    .then((p) => {
+      if (seq !== tblSeq) return tblState; // superseded by a newer request
+      const next = tblState.cursors.slice(0, target);
+      if (p.hasNextPage && p.endCursor) next[target] = p.endCursor;
+      tblState = {
+        ...tblState, status: "data", orders: p.orders, hasNextPage: p.hasNextPage && !!p.endCursor, cursors: next, loadedAt: Date.now(),
+        total: p.totalCount != null ? { count: p.totalCount, precision: p.totalPrecision === "AT_LEAST" ? "AT_LEAST" : "EXACT" } : null,
+      };
+      tblEmit();
+      return tblState;
+    })
+    .catch((e) => {
+      if (seq !== tblSeq) return tblState;
+      tblState = { ...tblState, status: "error", error: String(e) };
+      tblEmit();
+      return tblState;
+    });
+}
+/** Load page 1 when the store/request changed or the cache was invalidated; no-op while loading, loaded, or errored (Retry is explicit). */
+export function ensureOrdersPage(store: StoreId, request: OrdersRequest): void {
+  const same = tblState.store === store && tblState.request != null && sameRequest(tblState.request, request);
+  if (same && tblState.status !== "idle") return;
+  void loadOrdersPage(store, request, same ? tblState.page : 1);
+}
+export function goToOrdersPage(page: number): void {
+  if (tblState.store && tblState.request) void loadOrdersPage(tblState.store, tblState.request, page);
+}
+export const useOrdersTable = () =>
+  useSyncExternalStore((fn) => { tblSubs.add(fn); return () => { tblSubs.delete(fn); }; }, () => tblState);
+/** Mark the table stale: a mounted Orders page refetches its current page, an unmounted one refetches on next visit. */
+export function invalidateOrdersTable(): void {
+  if (tblState.status !== "data" && tblState.status !== "error") return;
+  tblState = { ...tblState, status: "idle" };
+  tblEmit();
+}
+
+// Shopify search-syntax values for the display enums (only statuses Shopify can filter on are listed).
+const FINANCIAL_QUERY: Record<string, string> = {
+  PAID: "paid", PENDING: "pending", AUTHORIZED: "authorized", PARTIALLY_PAID: "partially_paid",
+  PARTIALLY_REFUNDED: "partially_refunded", REFUNDED: "refunded", VOIDED: "voided", EXPIRED: "expired",
+};
+const FULFILLMENT_QUERY: Record<string, string> = {
+  UNFULFILLED: "unfulfilled", PARTIALLY_FULFILLED: "partial", FULFILLED: "fulfilled", SCHEDULED: "scheduled", ON_HOLD: "on_hold", REQUEST_DECLINED: "request_declined",
+};
+export const FINANCIAL_FILTER_VALUES = Object.keys(FINANCIAL_QUERY);
+export const FULFILLMENT_FILTER_VALUES = Object.keys(FULFILLMENT_QUERY);
+/** The "Unfulfilled" quick filter: open orders that still need fulfillment work. */
+export const OPEN_WORK_STATUSES: readonly string[] = ["UNFULFILLED", "PARTIALLY_FULFILLED", "ON_HOLD", "SCHEDULED"];
+
+// Search-syntax special characters are `: \ ( )`; a term may not start with `-`, `'` or `"`.
+const escapeTerm = (s: string) => s.replace(/[\\:()]/g, (c) => `\\${c}`);
+const words = (s: string | undefined) =>
+  (s ?? "").trim().split(/\s+/).map((w) => w.replace(/^[#'"\-]+/, "")).filter(Boolean).map(escapeTerm);
+const anyOf = (field: string, values: string[]) =>
+  values.length === 1 ? `${field}:${values[0]}` : `(${values.map((v) => `${field}:${v}`).join(" OR ")})`;
+
+export interface OrdersFilter {
+  /** Free text: Shopify's default multi-field search (order name, customer, email, …). */
+  text?: string;
+  /** Order-number column filter → `name:` terms. */
+  name?: string;
+  /** Customer column filter → free text (there is no customer_name field; default search covers name and email). */
+  customer?: string;
+  financial?: string[];
+  fulfillment?: string[];
+  /** Adds `status:open` (not closed/archived, not cancelled). */
+  openOnly?: boolean;
+}
+/** Build the Shopify `query` string for the orders connection and ordersCount. */
+export function buildOrdersQuery(f: OrdersFilter): string {
+  const out: string[] = [];
+  if (f.openOnly) out.push("status:open");
+  out.push(...words(f.text));
+  out.push(...words(f.name).map((w) => `name:${w}`));
+  out.push(...words(f.customer));
+  const fin = (f.financial ?? []).map((v) => FINANCIAL_QUERY[v]).filter(Boolean);
+  if (fin.length) out.push(anyOf("financial_status", fin));
+  const ful = (f.fulfillment ?? []).map((v) => FULFILLMENT_QUERY[v]).filter(Boolean);
+  if (ful.length) out.push(anyOf("fulfillment_status", ful));
+  return out.join(" ");
+}
+
 // ---- inventory (mirrors list_inventory in lib.rs) ----
 export interface InventoryLevel { location: string; available: number; onHand: number; committed: number }
 export interface InventoryVariant {

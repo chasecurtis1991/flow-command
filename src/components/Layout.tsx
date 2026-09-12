@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppContext, prefs, type Accent, type AppCtx, type Density } from "../lib/app";
 import {
   STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById, invalidateInventory,
-  invalidateCatalog, loadCatalog, useCatalog,
+  invalidateCatalog, invalidateOrdersTable, loadCatalog, useCatalog,
 } from "../lib/shopify";
 import { customers, unpostedCoaCount, addLot } from "../lib/mock";
 
@@ -65,6 +65,7 @@ export function Layout() {
     const label = storeById(store).label;
     invalidateInventory();
     invalidateCatalog();
+    invalidateOrdersTable(); // a mounted Orders page refetches its current page
     void loadOrders(store, true).then((s) => {
       const ms = Math.round(performance.now() - t0);
       toast(s.status === "data" ? `Synced ${label} · ${s.orders.length} orders · ${ms} ms` : `Refresh failed · ${s.error ?? "unknown error"}`);
