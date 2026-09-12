@@ -1,7 +1,7 @@
 // Browser-preview shim: when `npm run dev` is opened in a plain browser (no Tauri runtime),
 // answer Tauri `invoke` calls with the design's sample orders so the UI can be reviewed.
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
-import type { Order, OrderDetail } from "./shopify";
+import type { InventoryResult, InventoryVariant, Order, OrderDetail } from "./shopify";
 
 const STORES = [
   { id: "retail", label: "Retail", domain: "3wvfyr-1i.myshopify.com" },
@@ -43,9 +43,38 @@ const detail = (id: string): OrderDetail => {
   };
 };
 
+// Inventory sample: [product, variant, sku, status, tracked, warehouse, retail floor, committed]
+const INV_LOCS = ["Warehouse", "Retail floor"];
+type RawInv = [string, string | null, string | null, string, boolean, number, number, number];
+const INV_RAW: RawInv[] = [
+  ["Sour Space Candy", "7g", "FG-SSC-7G", "ACTIVE", true, 84, 12, 3],
+  ["Lifter", "1 lb", "FG-LFT-1LB", "ACTIVE", true, 14, 0, 6],
+  ["Suver Haze", "1 lb", "FG-SVH-1LB", "ACTIVE", true, 0, 0, 0],
+  ["Special Sauce", "3.5g", "FG-SPS-3.5G", "ACTIVE", true, 6, 2, 0],
+  ["Bubba Kush biomass", "10 lb", "FG-BBK-10LB", "ACTIVE", false, 0, 0, 0],
+  ["Hawaiian Haze", "14g", "FG-HH-14G", "DRAFT", true, 30, 4, 0],
+  ["Elektra", null, null, "ACTIVE", true, 22, 5, 1],
+  ["Cherry Wine", "7g", "FG-CHW-7G", "ACTIVE", true, 48, 9, 2],
+];
+const invVariants: InventoryVariant[] = INV_RAW.map((v, i) => {
+  const [productTitle, variantTitle, sku, productStatus, tracked, wh, rf, committed] = v;
+  const available = wh + rf - committed;
+  return {
+    id: `gid://shopify/ProductVariant/${40000 + i}`, productTitle, variantTitle, sku, productStatus, tracked, available,
+    levels: tracked ? [
+      { location: INV_LOCS[0], available: wh - committed, onHand: wh, committed },
+      { location: INV_LOCS[1], available: rf, onHand: rf, committed: 0 },
+    ] : [],
+  };
+});
+const inventory = (): InventoryResult => ({
+  variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
+  locations: INV_LOCS, levelsError: null, truncated: false,
+});
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  await wait(cmd === "list_orders" ? 500 : 180);
+  await wait(cmd === "list_orders" ? 500 : cmd === "list_inventory" ? 400 : 180);
   if (cmd === "plugin:opener|open_url") { window.open(String(args.url), "_blank"); return null; }
   switch (cmd) {
     case "ping": return "Flow Command is running ✓ (browser mock)";
@@ -57,6 +86,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "fetch_shop_info": { const s = STORES.find((x) => x.id === (args.storeId ?? active))!; return { shopName: `Flow Gardens ${s.label}`, status: "Connected ✓", shopDomain: s.domain }; }
     case "list_orders": return active === "retail" ? orders : orders.filter((o) => (active === "b2b" ? o.name.startsWith("#W") : o.name.startsWith("#B")));
     case "get_order": return detail(String(args.orderId));
+    case "list_inventory": return inventory();
     default: throw new Error(`devMock: unknown command ${cmd}`);
   }
 }
@@ -67,4 +97,4 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   plugins: { path: { sep: "/", delimiter: ":" } },
 };
-console.warn("[Flow Command] Browser preview: Tauri invoke is mocked with sample orders. Run `npm run tauri dev` for live Shopify data.");
+console.warn("[Flow Command] Browser preview: Tauri invoke is mocked with sample orders and inventory. Run `npm run tauri dev` for live Shopify data.");

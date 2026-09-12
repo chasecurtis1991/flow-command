@@ -1,22 +1,84 @@
-import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useApp } from "../lib/app";
 import { coaColor, driftColor, lotsSummary, shopInv, useLots } from "../lib/mock";
-import { EmptyState, Pill, SampleData } from "../components/ui";
+import { type InventoryVariant, type Kind, loadInventory, lowStock, storeById, useInventory } from "../lib/shopify";
+import { EmptyState, ErrorState, LoadingState, Pill, SampleData } from "../components/ui";
 
+// FGINV drift banner still derives from the design sample until FGINV has a backend.
 const drifted = shopInv.filter((v) => v.sync.startsWith("Drift"));
 const driftUnits = drifted.reduce((a, v) => a + Math.abs(parseInt(v.sync.replace(/[^\d+\-−]/g, "").replace("−", "-"), 10) || 0), 0);
 
+const titleCase = (s: string) => s.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+const statusPill = (v: InventoryVariant): { label: string; kind: Kind } => {
+  if (!v.tracked) return { label: "Untracked", kind: "neutral" };
+  if (v.productStatus === "ACTIVE") return { label: "Active", kind: "green" };
+  if (v.productStatus === "DRAFT") return { label: "Draft", kind: "amber" };
+  if (v.productStatus === "ARCHIVED") return { label: "Archived", kind: "neutral" };
+  return { label: titleCase(v.productStatus), kind: "neutral" };
+};
+const sum = (v: InventoryVariant, k: "onHand" | "committed") => (v.levels.length ? v.levels.reduce((a, l) => a + l[k], 0) : "—");
+
 export function Inventory() {
-  const { toast, openSheet } = useApp();
+  const navigate = useNavigate();
+  const { store, storeReady, toast, openSheet } = useApp();
+  const inv = useInventory();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "fginv" ? "fginv" : "shopify";
   const setTab = (t: "shopify" | "fginv") => setParams(t === "fginv" ? { tab: "fginv" } : {}, { replace: true });
   const [q, setQ] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
   const lots = useLots();
+
+  useEffect(() => {
+    if (storeReady && tab === "shopify" && (inv.status === "idle" || (inv.store !== store && inv.status !== "loading"))) void loadInventory(store);
+  }, [storeReady, tab, store, inv.status, inv.store]);
+
   const s = q.trim().toLowerCase();
-  const rows = shopInv.filter((v) => (!lowOnly || v.lowStock) && (!s || `${v.title} ${v.size} ${v.sku}`.toLowerCase().includes(s)));
+  const variants = inv.data?.variants ?? [];
+  const locations = inv.data?.locations ?? [];
+  const rows = variants.filter((v) => (!lowOnly || lowStock(v)) && (!s || `${v.productTitle} ${v.variantTitle ?? ""} ${v.sku ?? ""}`.toLowerCase().includes(s)));
+
+  const sync = () => {
+    const t0 = performance.now();
+    const label = storeById(store).label;
+    void loadInventory(store, true).then((st) => {
+      const ms = Math.round(performance.now() - t0);
+      toast(st.status === "data" ? `Synced ${label} · ${st.data?.variants.length ?? 0} variants · ${ms} ms` : `Sync failed · ${st.error ?? "unknown error"}`);
+    });
+  };
+
+  let body;
+  if (inv.status === "loading" || inv.status === "idle") body = <LoadingState label="Loading inventory from Shopify…" />;
+  else if (inv.status === "error") body = (
+    <ErrorState title="Couldn’t reach Shopify" why={(inv.error ?? "Unknown error").slice(0, 160)} actions={<>
+      <button className="btn btn-primary" onClick={() => void loadInventory(store, true)}>Retry</button>
+      <button className="btn btn-secondary" onClick={() => navigate("/settings")}>Open settings</button>
+    </>} />
+  );
+  else if (rows.length === 0) body = <EmptyState title="No variants match" why="Try another SKU or clear Low stock only." />;
+  else body = (
+    <div className="scroll">
+      {rows.map((v) => {
+        const st = statusPill(v);
+        return (
+          <div key={v.id} className="row cols-inv">
+            <span className="ellip">
+              {v.productTitle}
+              {v.variantTitle != null && <span className="mute"> · {v.variantTitle}</span>}
+              {v.productStatus !== "ACTIVE" && <> <span className="tag-caps">{v.productStatus}</span></>}
+            </span>
+            <span className="sub mono" style={{ fontSize: 12 }}>{v.sku ?? "—"}</span>
+            <span className="r">{sum(v, "onHand")}</span>
+            <span className="r">{sum(v, "committed")}</span>
+            <span className="r" style={{ fontWeight: 500, color: lowStock(v) ? "var(--amber)" : "var(--text)" }}>{v.available}</span>
+            <span className="r sub">—</span>
+            <span><Pill kind={st.kind}>{st.label}</Pill></span>
+          </div>
+        );
+      })}
+    </div>
+  );
 
   return (
     <section className="screen screen-full">
@@ -24,37 +86,34 @@ export function Inventory() {
         <button className={`tab${tab === "shopify" ? " active" : ""}`} onClick={() => setTab("shopify")}>Shopify</button>
         <button className={`tab${tab === "fginv" ? " active" : ""}`} onClick={() => setTab("fginv")}>FGINV <span className="tag-caps">SOURCE OF TRUTH</span></button>
         <div className="spacer" />
-        {tab === "shopify" && <span className="mute" style={{ fontSize: 12 }}>Read-only mirror of Shopify · sample data</span>}
-        <SampleData />
+        {tab === "shopify" ? (
+          <>
+            <span className="mute" style={{ fontSize: 12 }}>Read-only mirror of Shopify</span>
+            {inv.status === "data" && <Pill kind="green" sm>Live</Pill>}
+          </>
+        ) : <SampleData />}
       </div>
 
       {tab === "shopify" ? (
         <>
           <div className="toolbar">
             <input className="input" style={{ width: 280 }} placeholder="Search variants or SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
-            <button className="btn btn-control">Location <span className="muted">All</span></button>
+            <button className="btn btn-control">Location <span className="muted">{locations.join(", ") || "All"}</span></button>
             <button className={`btn btn-control${lowOnly ? " on" : ""}`} onClick={() => setLowOnly((v) => !v)}>Low stock only</button>
             <div className="spacer" />
-            <button className="btn btn-control" onClick={() => toast("Shopify sync isn’t wired yet — sample data")}>Sync now</button>
+            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{rows.length} variants</span>
+            <button className="btn btn-control" onClick={sync}>Sync now</button>
           </div>
-          <div className="thead cols-inv">
-            <span>Variant</span><span>SKU</span><span className="r">Warehouse</span><span className="r">Retail floor</span><span className="r">Available</span><span className="r">FGINV</span><span>Sync</span>
-          </div>
-          {rows.length === 0 ? <EmptyState title="No variants match" why="Try another SKU or clear Low stock only." /> : (
-            <div className="scroll">
-              {rows.map((v) => (
-                <div key={v.sku} className="row cols-inv">
-                  <span className="ellip">{v.title} <span className="mute">· {v.size}</span></span>
-                  <span className="sub mono" style={{ fontSize: 12 }}>{v.sku}</span>
-                  <span className="r">{v.wh}</span>
-                  <span className="r">{v.retail}</span>
-                  <span className="r" style={{ fontWeight: 500, color: v.lowStock ? "var(--amber)" : "var(--text)" }}>{v.avail}</span>
-                  <span className="r sub">{v.fginv}</span>
-                  <span><Pill kind={v.syncKind}>{v.sync}</Pill></span>
-                </div>
-              ))}
+          {inv.data?.levelsError && (
+            <div className="mute" style={{ fontSize: 12, padding: "0 24px 8px" }}>
+              On hand / committed unavailable · needs read_inventory + read_locations · {inv.data.levelsError.slice(0, 120)}
             </div>
           )}
+          {inv.data?.truncated && <div className="mute" style={{ fontSize: 12, padding: "0 24px 8px" }}>Showing the first 1,500 variants</div>}
+          <div className="thead cols-inv">
+            <span>Variant</span><span>SKU</span><span className="r">On hand</span><span className="r">Committed</span><span className="r">Available</span><span className="r">FGINV</span><span>Status</span>
+          </div>
+          {body}
         </>
       ) : (
         <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: 16, overflow: "auto" }}>

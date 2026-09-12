@@ -114,6 +114,44 @@ pub struct LineItem {
     pub price: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryLevel {
+    pub location: String,
+    pub available: i64,
+    pub on_hand: i64,
+    pub committed: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryVariant {
+    pub id: String,
+    pub product_title: String,
+    /// None when Shopify's title is "Default Title".
+    pub variant_title: Option<String>,
+    pub sku: Option<String>,
+    /// ACTIVE | DRAFT | ARCHIVED
+    pub product_status: String,
+    pub tracked: bool,
+    /// inventoryQuantity across all locations.
+    pub available: i64,
+    /// Empty when the products-only fallback was used.
+    pub levels: Vec<InventoryLevel>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InventoryResult {
+    pub variants: Vec<InventoryVariant>,
+    /// Unique location names, first-seen order.
+    pub locations: Vec<String>,
+    /// Set when the full query was denied (scope) and the products-only fallback was used.
+    pub levels_error: Option<String>,
+    /// True when the 15-page cap was hit with more pages remaining.
+    pub truncated: bool,
+}
+
 fn keychain_entry(account: &str) -> Result<Entry, String> {
     Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain error: {e}"))
 }
@@ -627,6 +665,137 @@ async fn get_order(order_id: String) -> Result<OrderDetail, String> {
     })
 }
 
+const INVENTORY_PAGE_CAP: usize = 15;
+
+fn inventory_query(after: Option<&str>, with_levels: bool) -> String {
+    let after = after.map_or("null".to_string(), |c| format!("\"{c}\""));
+    let levels = if with_levels {
+        r#"inventoryItem { tracked inventoryLevels(first: 3) { edges { node { location { name } quantities(names: ["available", "on_hand", "committed"]) { name quantity } } } } }"#
+    } else {
+        ""
+    };
+    format!(
+        "query {{ productVariants(first: 100, after: {after}, sortKey: ID) {{ pageInfo {{ hasNextPage endCursor }} edges {{ node {{ id title sku inventoryQuantity product {{ title status }} {levels} }} }} }} }}"
+    )
+}
+
+fn parse_variants(page: &serde_json::Value) -> Vec<InventoryVariant> {
+    page["data"]["productVariants"]["edges"]
+        .as_array()
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|edge| {
+                    let node = &edge["node"];
+                    let item = &node["inventoryItem"];
+                    let levels = item["inventoryLevels"]["edges"]
+                        .as_array()
+                        .map(|ls| {
+                            ls.iter()
+                                .filter_map(|l| {
+                                    let n = &l["node"];
+                                    let qty = |name: &str| {
+                                        n["quantities"]
+                                            .as_array()
+                                            .and_then(|qs| qs.iter().find(|q| q["name"] == name))
+                                            .and_then(|q| q["quantity"].as_i64())
+                                            .unwrap_or(0)
+                                    };
+                                    Some(InventoryLevel {
+                                        location: n["location"]["name"].as_str()?.to_string(),
+                                        available: qty("available"),
+                                        on_hand: qty("on_hand"),
+                                        committed: qty("committed"),
+                                    })
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some(InventoryVariant {
+                        id: node["id"].as_str()?.to_string(),
+                        product_title: node["product"]["title"].as_str()?.to_string(),
+                        variant_title: node["title"]
+                            .as_str()
+                            .filter(|t| *t != "Default Title")
+                            .map(String::from),
+                        sku: node["sku"]
+                            .as_str()
+                            .filter(|s| !s.is_empty())
+                            .map(String::from),
+                        product_status: node["product"]["status"].as_str()?.to_string(),
+                        tracked: item["tracked"].as_bool().unwrap_or(true),
+                        available: node["inventoryQuantity"].as_i64().unwrap_or(0),
+                        levels,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Returns (variants, truncated). Err carries the 0-based page index that failed.
+async fn fetch_inventory_pages(
+    shop_domain: &str,
+    with_levels: bool,
+) -> Result<(Vec<InventoryVariant>, bool), (usize, String)> {
+    let mut variants = Vec::new();
+    let mut after: Option<String> = None;
+    for page in 0..INVENTORY_PAGE_CAP {
+        let result = graphql_query(shop_domain, &inventory_query(after.as_deref(), with_levels))
+            .await
+            .map_err(|e| (page, e))?;
+        variants.extend(parse_variants(&result));
+        let info = &result["data"]["productVariants"]["pageInfo"];
+        match info["endCursor"].as_str() {
+            Some(c) if info["hasNextPage"].as_bool().unwrap_or(false) => after = Some(c.to_string()),
+            _ => return Ok((variants, false)),
+        }
+    }
+    Ok((variants, true))
+}
+
+// List all variants with per-location inventory for active store
+#[tauri::command]
+async fn list_inventory() -> Result<InventoryResult, String> {
+    let shop_domain = get_active_store()?.domain;
+
+    let (mut variants, truncated, levels_error) = match fetch_inventory_pages(&shop_domain, true).await {
+        Ok((v, t)) => (v, t, None),
+        // Scope denial surfaces on the first page; fall back to products-only (read_products).
+        Err((0, e)) if {
+            let l = e.to_lowercase();
+            l.contains("access") || l.contains("scope")
+        } => {
+            let (v, t) = fetch_inventory_pages(&shop_domain, false)
+                .await
+                .map_err(|(_, e)| e)?;
+            (v, t, Some(e))
+        }
+        Err((_, e)) => return Err(e),
+    };
+
+    let mut locations: Vec<String> = Vec::new();
+    for l in variants.iter().flat_map(|v| &v.levels) {
+        if !locations.contains(&l.location) {
+            locations.push(l.location.clone());
+        }
+    }
+
+    variants.sort_by_cached_key(|v| {
+        (
+            v.product_title.to_lowercase(),
+            v.variant_title.as_deref().unwrap_or("").to_lowercase(),
+        )
+    });
+
+    Ok(InventoryResult {
+        variants,
+        locations,
+        levels_error,
+        truncated,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -641,8 +810,59 @@ pub fn run() {
             fetch_shopify_token,
             fetch_shop_info,
             list_orders,
-            get_order
+            get_order,
+            list_inventory
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_variants_maps_fixture() {
+        let page = serde_json::json!({"data": {"productVariants": {"edges": [
+            {"node": {
+                "id": "gid://shopify/ProductVariant/1", "title": "Large", "sku": "FG-1", "inventoryQuantity": 7,
+                "product": {"title": "Rose", "status": "ACTIVE"},
+                "inventoryItem": {"tracked": true, "inventoryLevels": {"edges": [{"node": {
+                    "location": {"name": "Flow NC"},
+                    "quantities": [
+                        {"name": "available", "quantity": 7},
+                        {"name": "on_hand", "quantity": 9},
+                        {"name": "committed", "quantity": 2}
+                    ]
+                }}]}}
+            }},
+            {"node": {
+                "id": "gid://shopify/ProductVariant/2", "title": "Default Title", "sku": null, "inventoryQuantity": 0,
+                "product": {"title": "Tulip", "status": "DRAFT"}
+            }}
+        ]}}});
+
+        let v = parse_variants(&page);
+        assert_eq!(v.len(), 2);
+
+        assert_eq!(v[0].product_title, "Rose");
+        assert_eq!(v[0].variant_title.as_deref(), Some("Large"));
+        assert_eq!(v[0].sku.as_deref(), Some("FG-1"));
+        assert_eq!(v[0].product_status, "ACTIVE");
+        assert!(v[0].tracked);
+        assert_eq!(v[0].available, 7);
+        assert_eq!(v[0].levels.len(), 1);
+        assert_eq!(v[0].levels[0].location, "Flow NC");
+        assert_eq!(
+            (v[0].levels[0].available, v[0].levels[0].on_hand, v[0].levels[0].committed),
+            (7, 9, 2)
+        );
+
+        assert_eq!(v[1].product_title, "Tulip");
+        assert_eq!(v[1].variant_title, None);
+        assert_eq!(v[1].sku, None);
+        assert_eq!(v[1].product_status, "DRAFT");
+        assert!(v[1].tracked);
+        assert!(v[1].levels.is_empty());
+    }
 }

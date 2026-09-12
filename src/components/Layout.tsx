@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent }
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppContext, prefs, type Accent, type AppCtx, type Density } from "../lib/app";
 import {
-  STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById,
+  STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById, invalidateInventory,
 } from "../lib/shopify";
 import { products, customers, unpostedCoaCount, addLot } from "../lib/mock";
 
@@ -62,6 +62,7 @@ export function Layout() {
   const refresh = useCallback(() => {
     const t0 = performance.now();
     const label = storeById(store).label;
+    invalidateInventory();
     void loadOrders(store, true).then((s) => {
       const ms = Math.round(performance.now() - t0);
       toast(s.status === "data" ? `Synced ${label} · ${s.orders.length} orders · ${ms} ms` : `Refresh failed · ${s.error ?? "unknown error"}`);

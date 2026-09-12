@@ -88,6 +88,60 @@ export function loadOrders(store: StoreId, force = false): Promise<OrdersState> 
 export const useOrders = () =>
   useSyncExternalStore((fn) => { subs.add(fn); return () => { subs.delete(fn); }; }, () => ordersState);
 
+// ---- inventory (mirrors list_inventory in lib.rs) ----
+export interface InventoryLevel { location: string; available: number; onHand: number; committed: number }
+export interface InventoryVariant {
+  id: string;
+  productTitle: string;
+  variantTitle: string | null; // null when Shopify title is "Default Title"
+  sku: string | null;
+  productStatus: string; // ACTIVE | DRAFT | ARCHIVED
+  tracked: boolean;
+  available: number; // inventoryQuantity, all locations
+  levels: InventoryLevel[]; // empty when the products-only fallback ran
+}
+export interface InventoryResult {
+  variants: InventoryVariant[];
+  locations: string[];
+  levelsError: string | null; // set when the full query was denied and the fallback was used
+  truncated: boolean; // hit the 15-page cap
+}
+export const lowStock = (v: InventoryVariant) => v.tracked && v.available <= 10; // ponytail: fixed threshold; make it a setting when someone asks
+
+// ---- inventory cache (same shape and semantics as the orders cache) ----
+export interface InventoryState { store: StoreId | null; status: OrdersStatus; data: InventoryResult | null; error: string | null; loadedAt: number }
+let invState: InventoryState = { store: null, status: "idle", data: null, error: null, loadedAt: 0 };
+const invSubs = new Set<() => void>();
+const invEmit = () => invSubs.forEach((fn) => fn());
+
+/** Load inventory for `store`. Same contract as loadOrders: call after set_active_store resolved; never rejects. */
+export function loadInventory(store: StoreId, force = false): Promise<InventoryState> {
+  if (!force && invState.store === store && invState.status !== "idle" && invState.status !== "error") return Promise.resolve(invState);
+  invState = { ...invState, store, status: "loading", error: null };
+  invEmit();
+  return invoke<InventoryResult>("list_inventory")
+    .then((data) => {
+      if (invState.store !== store) return invState; // store switched mid-flight
+      invState = { store, status: "data", data, error: null, loadedAt: Date.now() };
+      invEmit();
+      return invState;
+    })
+    .catch((e) => {
+      if (invState.store !== store) return invState;
+      invState = { ...invState, status: "error", error: String(e) };
+      invEmit();
+      return invState;
+    });
+}
+export const useInventory = () =>
+  useSyncExternalStore((fn) => { invSubs.add(fn); return () => { invSubs.delete(fn); }; }, () => invState);
+/** Mark the cache stale: a mounted Inventory page reloads now, an unmounted one reloads on next visit. */
+export function invalidateInventory(): void {
+  if (invState.status !== "data" && invState.status !== "error") return;
+  invState = { ...invState, status: "idle" };
+  invEmit();
+}
+
 // ---- formatting ----
 export function money(s: string | null | undefined): string {
   if (!s) return "—";
