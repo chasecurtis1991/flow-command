@@ -157,7 +157,7 @@ export interface CatalogProduct {
   maxPrice: string;
   totalInventory: number;
   tracksInventory: boolean;
-  imageUrl: string | null; // featured media preview, ≤240px
+  imageUrl: string | null; // featured media preview, ≤480px
   options: ProductOption[]; // empty for default-variant-only products
   updatedAt: string;
 }

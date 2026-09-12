@@ -177,7 +177,7 @@ pub struct CatalogProduct {
     pub max_price: String,
     pub total_inventory: i64,
     pub tracks_inventory: bool,
-    /// Featured media preview scaled to ≤240px; None when the product has no media.
+    /// Featured media preview scaled to ≤480px (crisp on Retina swatches and grid cards); None when the product has no media.
     pub image_url: Option<String>,
     /// Empty when the product only has the default variant.
     pub options: Vec<ProductOption>,
@@ -844,7 +844,7 @@ const CATALOG_PAGE_CAP: usize = 20;
 fn catalog_query(after: Option<&str>) -> String {
     let after = after.map_or("null".to_string(), |c| format!("\"{c}\""));
     format!(
-        "query {{ products(first: {CATALOG_PAGE_SIZE}, after: {after}, sortKey: TITLE) {{ pageInfo {{ hasNextPage endCursor }} edges {{ node {{ id title handle status productType vendor tags totalInventory tracksInventory hasOnlyDefaultVariant updatedAt variantsCount {{ count }} priceRangeV2 {{ minVariantPrice {{ amount currencyCode }} maxVariantPrice {{ amount currencyCode }} }} featuredMedia {{ preview {{ image {{ url(transform: {{maxWidth: 240, maxHeight: 240}}) }} }} }} options(first: 3) {{ name values }} }} }} }} }}"
+        "query {{ products(first: {CATALOG_PAGE_SIZE}, after: {after}, sortKey: TITLE) {{ pageInfo {{ hasNextPage endCursor }} edges {{ node {{ id title handle status productType vendor tags totalInventory tracksInventory hasOnlyDefaultVariant updatedAt variantsCount {{ count }} priceRangeV2 {{ minVariantPrice {{ amount currencyCode }} maxVariantPrice {{ amount currencyCode }} }} featuredMedia {{ preview {{ image {{ url(transform: {{maxWidth: 480, maxHeight: 480}}) }} }} }} options(first: 3) {{ name values }} }} }} }} }}"
     )
 }
 
