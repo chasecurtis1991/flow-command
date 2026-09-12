@@ -53,12 +53,35 @@ Use `npm run tauri dev` for live Shopify data.
 ### Orders
 1. **Home** → "Fetch Shop Info" verifies connection
 2. Navigate to **Orders**
-3. Recent orders load automatically (50 most recent)
-4. Click any order row → detail panel shows line items, customer, totals
-5. Switch store with the segmented switcher in the title bar (or ⌘1 / ⌘2 / ⌘3) → orders auto-refresh
-6. Click "Refresh" to reload manually
+3. The first page of orders loads (50 rows by default, newest first). Page through **every** order with
+   **‹ Prev / Next ›** in the footer; the footer shows `1–50 of 312` and `Page 1 of 7` from Shopify's
+   `ordersCount` for the current filters (`10,000+` once Shopify stops counting exactly)
+4. **Rows** (25 / 50 / 100 / 200) changes the page size and jumps back to page 1
+5. Click any order row → detail panel shows line items, customer, totals (↑ ↓ move the selection, ← → page)
+6. Switch store with the segmented switcher in the title bar (or ⌘1 / ⌘2 / ⌘3) → orders auto-refresh
+7. Click "Refresh" (or ⌘R) to reload the current page
+
+Sorting and filtering on Orders happen in Shopify, so they cover all orders, not just the loaded page:
+click a header to sort (`sortKey` + `reverse`), use the header funnel or the search box to filter
+(Shopify search syntax: `status:open`, `financial_status:paid`, `fulfillment_status:unfulfilled`, `name:`,
+free text). The **Unfulfilled** toggle is a preset of the Fulfillment filter (unfulfilled, partial, on hold,
+scheduled) plus `status:open`.
 
 Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
+
+### Table controls (Orders, Catalog table view, Inventory · Shopify)
+- **Sort**: click a column header (buttons; `aria-sort` is set). First click uses the column's natural
+  direction (dates / amounts descending), the next click flips it.
+- **Filter**: hover a header and click the funnel — text columns get a *contains* box, status columns a
+  checklist. Active filters show as chips in the toolbar (× clears one, *Clear all* clears them).
+- **Reorder**: drag a header onto another one (drop indicator shows before/after), or use ‹ › in the
+  **Columns** menu.
+- **Show / hide**: **Columns** menu; *Reset* restores the defaults.
+- Column order, visibility, sort and (Orders) rows-per-page persist per table in `localStorage`
+  (`fc.table.orders`, `fc.table.catalog`, `fc.table.inventory`). Filters are per session.
+- Implementation: `src/lib/table.ts` (`useTable`, headless state + client-side apply) and
+  `src/components/DataTable.tsx` (`TableHead`, `TableRow`, `ColumnsMenu`, `FilterChips`, `FilterButton`,
+  `PageSizePicker`). Catalog / Inventory sort and filter client-side; Orders maps the same state to Shopify.
 
 ### Settings
 Store Shopify credentials in Keychain:
@@ -117,10 +140,13 @@ flow-command/
   - GraphQL Admin API queries (API version 2026-01)
   - Active store management
 - ✅ **Orders page**:
-  - List recent orders (50 most recent)
+  - Page through every order (cursor pagination, 25 / 50 / 100 / 200 rows per page, real `ordersCount`)
+  - Sort and filter in Shopify (sort keys + search syntax), search box, Unfulfilled preset
   - Click order → view detail with line items
   - Respects active store (auto-refreshes on store switch)
   - Loading & error states
+- ✅ **Table controls** on Orders, Catalog (table view) and Inventory · Shopify: sort, per-column filters,
+  drag-to-reorder, show / hide columns; preferences persist per table
 - ✅ **Inventory · Shopify tab**: every variant with per-location on hand / committed / available (falls back to
   products-only counts when `read_inventory` / `read_locations` are missing)
 - ✅ **Catalog page**: live products for the active store (title, type, status, variant count, from-price, featured
@@ -165,7 +191,11 @@ const info = await invoke<any>("fetch_shop_info");
 - `save_shopify_credentials(client_id, client_secret)` — store to Keychain
 - `fetch_shopify_token(shop_domain)` — Shopify client credentials OAuth (legacy, token caching used internally)
 - `fetch_shop_info()` — demo GraphQL query (shop name)
-- `list_orders(first?)` — list recent orders for active store (default 25, up to 100)
+- `list_orders(first?)` — most recent orders for the active store (default 50, up to 200; Home KPIs, badge, ⌘K)
+- `list_orders_page(first?, after?, sort_key?, reverse?, query?)` — one page of orders for the Orders table:
+  cursor pagination, page size ≤ 200 (a 200-row page costs ~803 of Shopify's 1,000-point single-query budget),
+  `OrderSortKeys` subset, Shopify search-syntax `query`; returns `{ orders, hasNextPage, endCursor,
+  totalCount, totalPrecision }` (`ordersCount(limit: 10000)` for the same query)
 - `get_order(order_id)` — fetch single order detail with line items (uses Shopify GID)
 - `list_inventory()` — every variant of the active store with per-location quantities (up to 1,500)
 - `list_products()` — every product of the active store, title-sorted, with variant count, price range, status and

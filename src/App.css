@@ -319,7 +319,8 @@ input:focus-visible { outline: none; }
 .th:hover .th-filter, .th-filter:focus-visible, .th-filter.on, .th-filter[aria-expanded="true"] { opacity: 1; }
 .th-filter:hover { color: var(--soft); background: rgba(255, 255, 255, 0.06); }
 .th-filter.on { color: var(--accent); background: var(--accent-soft); }
-.th[draggable="true"] { cursor: grab; }
+.th.movable { cursor: grab; touch-action: none; }
+.thead.dragging, .thead.dragging .th, .thead.dragging .th-sort { cursor: grabbing; }
 .th.dragging { opacity: 0.35; }
 .th.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
 .th.drop-after { box-shadow: inset -2px 0 0 var(--accent); }

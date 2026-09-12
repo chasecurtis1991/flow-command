@@ -40,11 +40,17 @@ glow. Orders uses a split layout with a fixed 420px detail panel.
 
 `.btn` (+ `-primary -secondary -control -ghost -danger -warn`, `.btn-lg .btn-sm`), `.input` (+ `.input-dark`),
 `.pill.{green|amber|red|neutral}`, `.status`, `.dot.{retail|b2b|bulk|green|amber|red|mute}`, `.card` (+ `.card-pad
-.card-head .clip`), `.list` / `.list-row`, `.toolbar`, `.thead` / `.row` with `.cols-*` column templates, `.tabs` /
-`.tab`, `.seg` / `.seg-item`, `.seg-sm`, `.kpi`, `.state` (loading / empty / error), `.overlay` + `.dialog`
-(`.palette`, `.sheet`), `.toast`.
+.card-head .clip`), `.list` / `.list-row`, `.toolbar`, `.thead` / `.row` with `.cols-*` column templates (the
+Orders / Catalog / Inventory templates come from `useTable()`), `.tabs` / `.tab`, `.seg` / `.seg-item`, `.seg-sm`,
+`.kpi`, `.state` (loading / empty / error), `.overlay` + `.dialog` (`.palette`, `.sheet`), `.toast`.
+
+Table controls (`components/DataTable.tsx`): `.thead .th` header cell with `.th-sort` (sort button, accent
+`.th-arrow`), `.th-filter` (funnel, `.on` when active), drag states `.dragging` / `.drop-before` / `.drop-after`;
+`.popover` (glass panel under a header or toolbar button) with `.popover-title`, `.menu-item` (+ `.check`),
+`.menu-sep`, `.menu-foot`, `.icon-btn`; `.chip` for active filters; `.table-foot` pager bar; `.rows-dim` while a
+page reloads.
 
 ## Keyboard
 
 ⌘K palette · ⌘1/2/3 switch store · ⌘R refresh · ⌘⇧R receive lot · ⌘F focus the table search · ⌘, settings ·
-↑↓ move the Orders selection · esc closes overlays.
+↑↓ move the Orders selection · ←→ previous / next Orders page · esc closes overlays and popovers.

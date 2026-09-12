@@ -1,7 +1,7 @@
 // Table chrome built on useTable(): sortable / filterable / drag-reorderable header, column-visibility menu,
 // active-filter chips, page-size picker and a row renderer. Styling: ".thead .th", ".popover", ".menu-item",
 // ".chip" etc. in App.css — same dark shell vocabulary as the rest of the app.
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { type ColumnDef, type Table, isFilterSet } from "../lib/table";
 
 // ---------- Popover ----------
@@ -106,65 +106,89 @@ export function FilterButton<Row>({ table, column, label }: { table: Table<Row>;
 }
 
 // ---------- Header ----------
+// Column reordering uses Pointer Events rather than HTML5 drag-and-drop: the latter is intercepted by Tauri's
+// native drag-drop handler inside WKWebView and is flaky under automation.
 interface Drag { id: string | null; over: string | null; after: boolean }
 const NO_DRAG: Drag = { id: null, over: null, after: false };
+const DRAG_THRESHOLD = 5;
 
 export function TableHead<Row>({ table, sticky, className }: { table: Table<Row>; sticky?: boolean; className?: string }) {
   const [drag, setDrag] = useState<Drag>(NO_DRAG);
+  const dragRef = useRef<Drag>(NO_DRAG);
+  const headRef = useRef<HTMLDivElement>(null);
+  const moveTo = useRef(table.moveTo);
+  moveTo.current = table.moveTo;
+  // Set when a press turned into a drag, so a sort click landing on the same header afterwards is swallowed.
+  const swallowClick = useRef(false);
+  const update = (d: Drag) => { dragRef.current = d; setDrag(d); };
+
+  // No pointer capture: capturing retargets the follow-up `click` to the header cell and would break the sort
+  // buttons. Move/up are tracked on the document for the duration of the press instead.
+  const onPointerDown = (col: ColumnDef<Row>) => (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (col.fixed || e.button !== 0 || (e.target as HTMLElement).closest(".th-filter, .popover")) return;
+    swallowClick.current = false;
+    const press = { id: col.id, x: e.clientX, active: false };
+    const onMove = (ev: PointerEvent) => {
+      if (!press.active) {
+        if (Math.abs(ev.clientX - press.x) < DRAG_THRESHOLD) return;
+        press.active = true;
+      }
+      let over: string | null = null, after = false;
+      headRef.current?.querySelectorAll<HTMLElement>("[data-col]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (ev.clientX >= r.left && ev.clientX <= r.right && el.dataset.col !== press.id && el.dataset.fixed !== "true") {
+          over = el.dataset.col ?? null;
+          after = ev.clientX > r.left + r.width / 2;
+        }
+      });
+      const cur = dragRef.current;
+      if (cur.id !== press.id || cur.over !== over || cur.after !== after) update({ id: press.id, over, after });
+    };
+    const finish = (drop: boolean) => () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onCancel);
+      if (press.active) {
+        swallowClick.current = true;
+        const d = dragRef.current;
+        if (drop && d.over && d.over !== press.id) moveTo.current(press.id, d.over, d.after);
+        update(NO_DRAG);
+      }
+    };
+    const onUp = finish(true), onCancel = finish(false);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onCancel);
+  };
+
   return (
-    <div className={`thead${sticky ? " sticky" : ""}${className ? ` ${className}` : ""}`} role="row" style={{ gridTemplateColumns: table.gridTemplate }}>
-      {table.columns.map((col) => <Th key={col.id} table={table} col={col} drag={drag} setDrag={setDrag} />)}
+    <div ref={headRef} className={`thead${sticky ? " sticky" : ""}${drag.id ? " dragging" : ""}${className ? ` ${className}` : ""}`} role="row" style={{ gridTemplateColumns: table.gridTemplate }}>
+      {table.columns.map((col) => <Th key={col.id} table={table} col={col} drag={drag} swallowClick={swallowClick} onPointerDown={onPointerDown(col)} />)}
     </div>
   );
 }
 
-function Th<Row>({ table, col, drag, setDrag }: { table: Table<Row>; col: ColumnDef<Row>; drag: Drag; setDrag: (d: Drag) => void }) {
+function Th<Row>({ table, col, drag, swallowClick, onPointerDown }: {
+  table: Table<Row>; col: ColumnDef<Row>; drag: Drag; swallowClick: { current: boolean }; onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+}) {
   const [open, setOpen] = useState(false);
   const dir = table.sort?.id === col.id ? table.sort.dir : null;
   const sortable = table.isSortable(col);
   const filterOn = isFilterSet(table.filters[col.id]);
-  const draggable = !col.fixed;
   const over = drag.over === col.id && drag.id !== col.id;
 
-  const onDragStart = (e: DragEvent<HTMLDivElement>) => {
-    e.dataTransfer.setData("text/plain", col.id);
-    e.dataTransfer.effectAllowed = "move";
-    setDrag({ id: col.id, over: null, after: false });
-  };
-  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
-    if (!drag.id || col.fixed || drag.id === col.id) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const r = e.currentTarget.getBoundingClientRect();
-    const after = e.clientX > r.left + r.width / 2;
-    if (drag.over !== col.id || drag.after !== after) setDrag({ ...drag, over: col.id, after });
-  };
-  const onDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const from = drag.id ?? e.dataTransfer.getData("text/plain");
-    if (from && from !== col.id && !col.fixed) table.moveTo(from, col.id, drag.after);
-    setDrag(NO_DRAG);
-  };
-
-  const cls = ["th", col.align === "right" ? "r" : "", dir ? "sorted" : "", drag.id === col.id ? "dragging" : "", over ? (drag.after ? "drop-after" : "drop-before") : ""]
+  const cls = ["th", col.align === "right" ? "r" : "", dir ? "sorted" : "", col.fixed ? "" : "movable", drag.id === col.id ? "dragging" : "", over ? (drag.after ? "drop-after" : "drop-before") : ""]
     .filter(Boolean).join(" ");
   const ariaSort = dir === "asc" ? "ascending" : dir === "desc" ? "descending" : sortable ? "none" : undefined;
+  const onSort = () => {
+    if (swallowClick.current) { swallowClick.current = false; return; }
+    table.toggleSort(col.id);
+  };
 
   return (
-    <div
-      className={cls}
-      role="columnheader"
-      aria-sort={ariaSort}
-      title={col.title}
-      draggable={draggable}
-      onDragStart={draggable ? onDragStart : undefined}
-      onDragOver={onDragOver}
-      onDragLeave={() => { if (drag.over === col.id) setDrag({ ...drag, over: null }); }}
-      onDrop={onDrop}
-      onDragEnd={() => setDrag(NO_DRAG)}
-    >
+    <div className={cls} role="columnheader" aria-sort={ariaSort} title={col.title} data-col={col.id} data-fixed={col.fixed ? "true" : undefined} onPointerDown={onPointerDown}>
       {col.header ?? (sortable ? (
-        <button type="button" className="th-sort" onClick={() => table.toggleSort(col.id)} aria-label={`Sort by ${col.label}${dir === "asc" ? " (descending)" : dir === "desc" ? " (ascending)" : ""}`}>
+        <button type="button" className="th-sort" onClick={onSort} aria-label={`Sort by ${col.label}${dir === "asc" ? " (descending)" : dir === "desc" ? " (ascending)" : ""}`}>
           <span className="lbl">{col.label}</span>
           {dir && <span className="th-arrow" aria-hidden="true">{dir === "asc" ? "↑" : "↓"}</span>}
         </button>
@@ -179,7 +203,6 @@ function Th<Row>({ table, col, drag, setDrag }: { table: Table<Row>; col: Column
             aria-label={`Filter ${col.label}`}
             aria-haspopup="dialog"
             aria-expanded={open}
-            draggable={false}
             onClick={(e: MouseEvent) => { e.stopPropagation(); setOpen((o) => !o); }}
           >
             <Funnel />
