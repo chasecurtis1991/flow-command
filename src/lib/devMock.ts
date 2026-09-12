@@ -1,7 +1,7 @@
 // Browser-preview shim: when `npm run dev` is opened in a plain browser (no Tauri runtime),
 // answer Tauri `invoke` calls with the design's sample orders so the UI can be reviewed.
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
-import type { InventoryResult, InventoryVariant, Order, OrderDetail } from "./shopify";
+import type { CatalogProduct, CatalogResult, InventoryResult, InventoryVariant, Order, OrderDetail } from "./shopify";
 
 const STORES = [
   { id: "retail", label: "Retail", domain: "3wvfyr-1i.myshopify.com" },
@@ -72,9 +72,35 @@ const inventory = (): InventoryResult => ({
   locations: INV_LOCS, levelsError: null, truncated: false,
 });
 
+// Catalog sample (the design's products): [title, type, status, stores r/b/u, sizes, min price, max price, tags]
+type RawProduct = [string, string, string, string, string[], number, number, string[]];
+const CAT_RAW: RawProduct[] = [
+  ["Sour Space Candy", "Flower", "ACTIVE", "rb", ["3.5g", "7g", "14g", "28g", "¼ lb", "1 lb"], 24, 520, ["sativa-leaning", "17.2% CBD"]],
+  ["Lifter", "Flower", "ACTIVE", "rbu", ["3.5g", "7g", "14g", "28g", "¼ lb", "1 lb", "5 lb"], 22, 2400, ["hybrid", "18.5% CBD"]],
+  ["Hawaiian Haze", "Flower", "ACTIVE", "rbu", ["3.5g", "7g", "14g", "28g", "¼ lb", "1 lb", "5 lb"], 26, 2600, ["sativa", "16.8% CBD"]],
+  ["Suver Haze", "Flower", "ACTIVE", "bu", ["¼ lb", "1 lb", "5 lb"], 80, 3100, ["sativa", "19.1% CBD"]],
+  ["Elektra", "Flower", "ACTIVE", "rb", ["3.5g", "7g", "14g", "28g", "1 lb"], 24, 520, ["indica-leaning", "15.9% CBD"]],
+  ["Cherry Wine", "Flower", "ACTIVE", "rb", ["3.5g", "7g", "14g", "¼ lb"], 26, 150, ["hybrid", "14.7% CBD"]],
+  ["Special Sauce", "Flower", "ACTIVE", "rb", ["3.5g", "7g", "14g", "¼ lb"], 24, 165, ["indica", "17.4% CBD"]],
+  ["Bubba Kush biomass", "Biomass", "ACTIVE", "u", ["10 lb", "50 lb"], 3100, 14000, ["indica", "biomass"]],
+  ["Pre-rolls · Hawaiian Haze", "Pre-rolls", "ACTIVE", "r", ["2pk", "5pk"], 14, 36, ["sativa"]],
+  ["Cherry Blossom", "Flower", "DRAFT", "r", ["3.5g", "7g", "pre-roll"], 10, 44, ["hybrid", "13.2% CBD"]],
+  ["Sour Lifter", "Flower", "ARCHIVED", "r", ["14g", "28g"], 70, 130, ["hybrid", "18.0% CBD"]],
+];
+const catProducts: (CatalogProduct & { stores: string })[] = CAT_RAW.map((p, i) => ({
+  id: `gid://shopify/Product/${70000 + i}`, title: p[0], handle: p[0].toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, ""), status: p[2],
+  productType: p[1], vendor: "Flow Gardens", tags: p[7], variantCount: p[4].length, minPrice: usd(p[5]), maxPrice: usd(p[6]),
+  totalInventory: p[2] === "ACTIVE" ? 40 * (i + 1) : 0, tracksInventory: p[1] !== "Biomass", imageUrl: null,
+  options: p[4].length > 1 ? [{ name: "Size", values: p[4] }] : [], updatedAt: hoursAgo(6 * (i + 1)), stores: p[3],
+}));
+const catalog = (): CatalogResult => ({
+  products: catProducts.filter((p) => p.stores.includes(active[0])).map(({ stores: _stores, ...p }) => p),
+  truncated: false,
+});
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  await wait(cmd === "list_orders" ? 500 : cmd === "list_inventory" ? 400 : 180);
+  await wait(cmd === "list_orders" ? 500 : cmd === "list_inventory" || cmd === "list_products" ? 400 : 180);
   if (cmd === "plugin:opener|open_url") { window.open(String(args.url), "_blank"); return null; }
   switch (cmd) {
     case "ping": return "Flow Command is running ✓ (browser mock)";
@@ -87,6 +113,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_orders": return active === "retail" ? orders : orders.filter((o) => (active === "b2b" ? o.name.startsWith("#W") : o.name.startsWith("#B")));
     case "get_order": return detail(String(args.orderId));
     case "list_inventory": return inventory();
+    case "list_products": return catalog();
     default: throw new Error(`devMock: unknown command ${cmd}`);
   }
 }
@@ -97,4 +124,4 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
   metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
   plugins: { path: { sep: "/", delimiter: ":" } },
 };
-console.warn("[Flow Command] Browser preview: Tauri invoke is mocked with sample orders and inventory. Run `npm run tauri dev` for live Shopify data.");
+console.warn("[Flow Command] Browser preview: Tauri invoke is mocked with sample orders, inventory and catalog. Run `npm run tauri dev` for live Shopify data.");

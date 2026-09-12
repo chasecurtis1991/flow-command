@@ -152,6 +152,46 @@ pub struct InventoryResult {
     pub truncated: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductOption {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogProduct {
+    pub id: String,
+    pub title: String,
+    pub handle: String,
+    /// ACTIVE | DRAFT | ARCHIVED
+    pub status: String,
+    /// None when the merchant left the type blank.
+    pub product_type: Option<String>,
+    pub vendor: Option<String>,
+    pub tags: Vec<String>,
+    pub variant_count: i64,
+    /// priceRangeV2.minVariantPrice as "24.00 USD" (same shape as Order.total_price); empty if missing.
+    pub min_price: String,
+    pub max_price: String,
+    pub total_inventory: i64,
+    pub tracks_inventory: bool,
+    /// Featured media preview scaled to ≤240px; None when the product has no media.
+    pub image_url: Option<String>,
+    /// Empty when the product only has the default variant.
+    pub options: Vec<ProductOption>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogResult {
+    pub products: Vec<CatalogProduct>,
+    /// True when the page cap was hit with more pages remaining.
+    pub truncated: bool,
+}
+
 fn keychain_entry(account: &str) -> Result<Entry, String> {
     Entry::new(KEYCHAIN_SERVICE, account).map_err(|e| format!("Keychain error: {e}"))
 }
@@ -796,6 +836,113 @@ async fn list_inventory() -> Result<InventoryResult, String> {
     })
 }
 
+// Each product node costs ~11 points (node + variantsCount + priceRangeV2×3 + featuredMedia×3 + options×3),
+// so 50 per page stays well under Shopify's 1,000-point single-query cap.
+const CATALOG_PAGE_SIZE: usize = 50;
+const CATALOG_PAGE_CAP: usize = 20;
+
+fn catalog_query(after: Option<&str>) -> String {
+    let after = after.map_or("null".to_string(), |c| format!("\"{c}\""));
+    format!(
+        "query {{ products(first: {CATALOG_PAGE_SIZE}, after: {after}, sortKey: TITLE) {{ pageInfo {{ hasNextPage endCursor }} edges {{ node {{ id title handle status productType vendor tags totalInventory tracksInventory hasOnlyDefaultVariant updatedAt variantsCount {{ count }} priceRangeV2 {{ minVariantPrice {{ amount currencyCode }} maxVariantPrice {{ amount currencyCode }} }} featuredMedia {{ preview {{ image {{ url(transform: {{maxWidth: 240, maxHeight: 240}}) }} }} }} options(first: 3) {{ name values }} }} }} }} }}"
+    )
+}
+
+fn parse_products(page: &serde_json::Value) -> Vec<CatalogProduct> {
+    let money = |m: &serde_json::Value| match (m["amount"].as_str(), m["currencyCode"].as_str()) {
+        (Some(a), Some(c)) => format!("{a} {c}"),
+        _ => String::new(),
+    };
+    let non_empty = |v: &serde_json::Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    let strings = |v: &serde_json::Value| -> Vec<String> {
+        v.as_array()
+            .map(|xs| xs.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default()
+    };
+    page["data"]["products"]["edges"]
+        .as_array()
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|edge| {
+                    let node = &edge["node"];
+                    let options = if node["hasOnlyDefaultVariant"].as_bool().unwrap_or(false) {
+                        Vec::new()
+                    } else {
+                        node["options"]
+                            .as_array()
+                            .map(|os| {
+                                os.iter()
+                                    .filter_map(|o| {
+                                        Some(ProductOption {
+                                            name: o["name"].as_str()?.to_string(),
+                                            values: strings(&o["values"]),
+                                        })
+                                    })
+                                    // Defensive: the placeholder option Shopify gives single-variant products.
+                                    .filter(|o| !(o.name == "Title" && o.values == ["Default Title"]))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    Some(CatalogProduct {
+                        id: node["id"].as_str()?.to_string(),
+                        title: node["title"].as_str()?.to_string(),
+                        handle: node["handle"].as_str().unwrap_or_default().to_string(),
+                        status: node["status"].as_str()?.to_string(),
+                        product_type: non_empty(&node["productType"]),
+                        vendor: non_empty(&node["vendor"]),
+                        tags: strings(&node["tags"]),
+                        variant_count: node["variantsCount"]["count"].as_i64().unwrap_or(1),
+                        min_price: money(&node["priceRangeV2"]["minVariantPrice"]),
+                        max_price: money(&node["priceRangeV2"]["maxVariantPrice"]),
+                        total_inventory: node["totalInventory"].as_i64().unwrap_or(0),
+                        tracks_inventory: node["tracksInventory"].as_bool().unwrap_or(true),
+                        image_url: non_empty(&node["featuredMedia"]["preview"]["image"]["url"]),
+                        options,
+                        updated_at: node["updatedAt"].as_str().unwrap_or_default().to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Returns (products, truncated).
+async fn fetch_catalog_pages(shop_domain: &str) -> Result<(Vec<CatalogProduct>, bool), String> {
+    let mut products = Vec::new();
+    let mut after: Option<String> = None;
+    for _ in 0..CATALOG_PAGE_CAP {
+        let result = graphql_query(shop_domain, &catalog_query(after.as_deref())).await?;
+        products.extend(parse_products(&result));
+        let info = &result["data"]["products"]["pageInfo"];
+        match info["endCursor"].as_str() {
+            Some(c) if info["hasNextPage"].as_bool().unwrap_or(false) => after = Some(c.to_string()),
+            _ => return Ok((products, false)),
+        }
+    }
+    Ok((products, true))
+}
+
+// List every product in the active store's catalog (title-sorted; needs read_products)
+#[tauri::command]
+async fn list_products() -> Result<CatalogResult, String> {
+    let shop_domain = get_active_store()?.domain;
+
+    let (mut products, truncated) = fetch_catalog_pages(&shop_domain).await.map_err(|e| {
+        let l = e.to_lowercase();
+        if l.contains("access denied") || l.contains("read_products") {
+            format!("Shopify denied product access for {shop_domain}: the app needs the read_products scope. {e}")
+        } else {
+            e
+        }
+    })?;
+
+    products.sort_by_cached_key(|p| p.title.to_lowercase());
+
+    Ok(CatalogResult { products, truncated })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -811,7 +958,8 @@ pub fn run() {
             fetch_shop_info,
             list_orders,
             get_order,
-            list_inventory
+            list_inventory,
+            list_products
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -864,5 +1012,63 @@ mod tests {
         assert_eq!(v[1].product_status, "DRAFT");
         assert!(v[1].tracked);
         assert!(v[1].levels.is_empty());
+    }
+
+    #[test]
+    fn parse_products_maps_fixture() {
+        let page = serde_json::json!({"data": {"products": {"edges": [
+            {"node": {
+                "id": "gid://shopify/Product/1", "title": "Lifter", "handle": "lifter", "status": "ACTIVE",
+                "productType": "Flower", "vendor": "Flow Gardens", "tags": ["hybrid", "cbd"],
+                "totalInventory": 364, "tracksInventory": true, "hasOnlyDefaultVariant": false, "updatedAt": "2026-09-10T12:00:00Z",
+                "variantsCount": {"count": 7},
+                "priceRangeV2": {"minVariantPrice": {"amount": "22.0", "currencyCode": "USD"}, "maxVariantPrice": {"amount": "520.0", "currencyCode": "USD"}},
+                "featuredMedia": {"preview": {"image": {"url": "https://cdn.shopify.com/lifter.jpg"}}},
+                "options": [{"name": "Size", "values": ["7g", "14g", "1 lb"]}]
+            }},
+            {"node": {
+                "id": "gid://shopify/Product/2", "title": "Bubba Kush biomass", "handle": "bubba-kush-biomass", "status": "DRAFT",
+                "productType": "", "vendor": "", "tags": [],
+                "totalInventory": 0, "tracksInventory": false, "hasOnlyDefaultVariant": true, "updatedAt": "2026-09-01T00:00:00Z",
+                "variantsCount": {"count": 1},
+                "priceRangeV2": {"minVariantPrice": {"amount": "3100.0", "currencyCode": "USD"}, "maxVariantPrice": {"amount": "3100.0", "currencyCode": "USD"}},
+                "featuredMedia": null,
+                "options": [{"name": "Title", "values": ["Default Title"]}]
+            }}
+        ]}}});
+
+        let p = parse_products(&page);
+        assert_eq!(p.len(), 2);
+
+        assert_eq!(p[0].title, "Lifter");
+        assert_eq!(p[0].status, "ACTIVE");
+        assert_eq!(p[0].product_type.as_deref(), Some("Flower"));
+        assert_eq!(p[0].vendor.as_deref(), Some("Flow Gardens"));
+        assert_eq!(p[0].tags, ["hybrid", "cbd"]);
+        assert_eq!(p[0].variant_count, 7);
+        assert_eq!(p[0].min_price, "22.0 USD");
+        assert_eq!(p[0].max_price, "520.0 USD");
+        assert_eq!(p[0].total_inventory, 364);
+        assert!(p[0].tracks_inventory);
+        assert_eq!(p[0].image_url.as_deref(), Some("https://cdn.shopify.com/lifter.jpg"));
+        assert_eq!(p[0].options.len(), 1);
+        assert_eq!(p[0].options[0].name, "Size");
+        assert_eq!(p[0].options[0].values, ["7g", "14g", "1 lb"]);
+
+        assert_eq!(p[1].status, "DRAFT");
+        assert_eq!(p[1].product_type, None);
+        assert_eq!(p[1].vendor, None);
+        assert!(p[1].tags.is_empty());
+        assert_eq!(p[1].variant_count, 1);
+        assert!(!p[1].tracks_inventory);
+        assert_eq!(p[1].image_url, None);
+        assert!(p[1].options.is_empty());
+    }
+
+    #[test]
+    fn catalog_query_pages_by_cursor() {
+        assert!(catalog_query(None).contains("after: null"));
+        assert!(catalog_query(Some("abc")).contains("after: \"abc\""));
+        assert!(catalog_query(None).contains("options(first: 3)"));
     }
 }

@@ -1,5 +1,5 @@
 // Sample data ported verbatim from the Claude Design export for surfaces that have no backend yet
-// (FGINV inventory, catalog, COAs, customers, analytics, activity feed). Pages that render this
+// (FGINV inventory, COAs, customers, analytics, activity feed). Pages that render this
 // show a "Sample data" pill. Replace each export with a Tauri command as backends land.
 import { useSyncExternalStore } from "react";
 import type { Kind } from "./shopify";
@@ -49,25 +49,6 @@ export function addLot(l: Lot) { lots = [l, ...lots]; lotSubs.forEach((fn) => fn
 export const lotsSummary = () => `${lots.length} lots · ${lots.reduce((a, l) => a + parseFloat(l.onhand), 0).toFixed(1)} lb on hand`;
 export const driftColor = (d: string) => (d === "0" ? T.mute : T.amber);
 export const coaColor = (c: Lot["coa"]) => (c === "Posted" ? T.green : c === "Pending" ? T.amber : T.red);
-
-// ---- Catalog ----
-const hues = [150, 160, 140, 155, 145, 165, 135, 120, 158, 150];
-const productRaw: [string, string, string, string, string, number, number][] = [
-  ["Sour Space Candy", "Sativa-leaning · 17.2% CBD", "Flower", "Active", "rb", 6, 24], ["Lifter", "Hybrid · 18.5% CBD", "Flower", "Active", "rbu", 7, 22],
-  ["Hawaiian Haze", "Sativa · 16.8% CBD", "Flower", "Active", "rbu", 7, 26], ["Suver Haze", "Sativa · 19.1% CBD", "Flower", "Active", "bu", 3, 80],
-  ["Elektra", "Indica-leaning · 15.9% CBD", "Flower", "Active", "rb", 5, 24], ["Cherry Wine", "Hybrid · 14.7% CBD", "Flower", "Active", "rb", 4, 26],
-  ["Special Sauce", "Indica · 17.4% CBD", "Flower", "Active", "rb", 4, 24], ["Bubba Kush", "Indica · biomass", "Biomass", "Active", "u", 2, 3100],
-  ["Cherry Blossom", "Hybrid · 13.2% CBD", "Flower", "Draft", "r", 3, 26], ["Sour Lifter", "Hybrid · 18.0% CBD", "Flower", "Archived", "", 2, 70],
-];
-export type StoreChip = "retail" | "b2b" | "bulk";
-const storeTag = (letters: string): StoreChip[] =>
-  (["retail", "b2b", "bulk"] as const).filter((id) => letters.includes(id[0]));
-export const products = productRaw.map((p, i) => ({
-  name: p[0], profile: p[1], type: p[2], status: p[3],
-  statusKind: (p[3] === "Active" ? "green" : p[3] === "Draft" ? "amber" : "neutral") as Kind,
-  stores: storeTag(p[4]), variants: p[5], price: p[6], swatch: `oklch(0.32 0.04 ${hues[i]})`,
-}));
-export const storeChipLabel: Record<StoreChip, string> = { retail: "R", b2b: "B2B", bulk: "Bulk" };
 
 // ---- Lab / COAs ----
 const coaRaw: [string, string, string, string, string, string, string, string, string, string][] = [

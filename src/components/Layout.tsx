@@ -3,8 +3,9 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppContext, prefs, type Accent, type AppCtx, type Density } from "../lib/app";
 import {
   STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById, invalidateInventory,
+  invalidateCatalog, loadCatalog, useCatalog,
 } from "../lib/shopify";
-import { products, customers, unpostedCoaCount, addLot } from "../lib/mock";
+import { customers, unpostedCoaCount, addLot } from "../lib/mock";
 
 const NAV = [
   { path: "/home", label: "Home" },
@@ -63,6 +64,7 @@ export function Layout() {
     const t0 = performance.now();
     const label = storeById(store).label;
     invalidateInventory();
+    invalidateCatalog();
     void loadOrders(store, true).then((s) => {
       const ms = Math.round(performance.now() - t0);
       toast(s.status === "data" ? `Synced ${label} · ${s.orders.length} orders · ${ms} ms` : `Refresh failed · ${s.error ?? "unknown error"}`);
@@ -215,11 +217,15 @@ interface Item { kind: string; label: string; meta: string; key: string; run: ()
 interface PaletteActions { refresh: () => void; openSheet: () => void; switchB2B: () => void; go: (path: string) => void }
 
 function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: OrdersState; onClose: () => void; actions: PaletteActions }) {
+  const catalog = useCatalog();
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const s = q.trim().toLowerCase();
   const match = (str: string) => !s || str.toLowerCase().includes(s);
   const mk = (kind: string, label: string, meta: string, key: string, fn: () => void): Item => ({ kind, label, meta, key, run: () => { onClose(); fn(); } });
+
+  // Products are loaded lazily on first palette open (no-op once the Catalog page has warmed the cache).
+  useEffect(() => { void loadCatalog(store); }, [store]);
 
   const groups = useMemo(() => [
     { label: "Pages", items: NAV.filter((n) => match(n.label)).map((n) => mk("Page", n.label, "", "", () => actions.go(n.path))) },
@@ -230,7 +236,13 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
         .slice(0, 4)
         .map((o) => mk("Order", o.name, `${o.customerName ?? o.customerEmail ?? "—"} · ${money(o.totalPrice)}`, "", () => actions.go(`/orders?sel=${encodeURIComponent(o.id)}`))),
     },
-    { label: "Products", items: products.filter((p) => match(p.name)).slice(0, 3).map((p) => mk("Product", p.name, p.profile, "", () => actions.go("/catalog"))) },
+    {
+      label: "Products",
+      items: (catalog.data?.products ?? [])
+        .filter((p) => match(`${p.title} ${p.productType ?? ""} ${p.tags.join(" ")}`))
+        .slice(0, 3)
+        .map((p) => mk("Product", p.title, [p.productType, money(p.minPrice)].filter(Boolean).join(" · "), "", () => actions.go(`/catalog?q=${encodeURIComponent(p.title)}`))),
+    },
     { label: "Customers", items: customers.filter((c) => match(c.name)).slice(0, 2).map((c) => mk("Customer", c.name, c.store, "", () => actions.go("/customers"))) },
     {
       label: "Actions",
@@ -241,7 +253,7 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
         ["Import COA", "Parse a lab PDF", "", () => actions.go("/lab")],
       ] as [string, string, string, () => void][]).filter((a) => match(a[0])).map((a) => mk("Action", a[0], a[1], a[2], a[3])),
     },
-  ].filter((g) => g.items.length), [s, orders.orders]); // eslint-disable-line react-hooks/exhaustive-deps
+  ].filter((g) => g.items.length), [s, orders.orders, catalog.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flat = groups.flatMap((g) => g.items);
   const active = Math.min(idx, Math.max(0, flat.length - 1));

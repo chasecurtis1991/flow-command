@@ -43,9 +43,10 @@ This starts:
 
 ## Browser preview (no Tauri)
 
-`npm run dev` and open http://localhost:1420 in a browser: Tauri `invoke` is mocked with the design's sample orders
-(`src/lib/devMock.ts`) so every screen can be reviewed. Screens without a backend yet (inventory, catalog, COAs,
-customers, analytics) show a **Sample data** pill in both modes. Use `npm run tauri dev` for live Shopify data.
+`npm run dev` and open http://localhost:1420 in a browser: Tauri `invoke` is mocked with the design's sample orders,
+inventory and catalog (`src/lib/devMock.ts`) so every screen can be reviewed. Screens without a backend yet (FGINV
+inventory, COAs, customers, analytics) show a **Sample data** pill in both modes; live screens show a **Live** pill.
+Use `npm run tauri dev` for live Shopify data.
 
 ## Usage
 
@@ -120,14 +121,18 @@ flow-command/
   - Click order → view detail with line items
   - Respects active store (auto-refreshes on store switch)
   - Loading & error states
+- ✅ **Inventory · Shopify tab**: every variant with per-location on hand / committed / available (falls back to
+  products-only counts when `read_inventory` / `read_locations` are missing)
+- ✅ **Catalog page**: live products for the active store (title, type, status, variant count, from-price, featured
+  image swatch), table + grid views, search and Status / Type filters, Sync now; needs `read_products`
 - ✅ Settings page (Keychain management)
 - ✅ Home page (connection test)
-- ✅ Page stubs for Inventory, Catalog, Lab, Customers, Analytics
+- ✅ Page stubs for FGINV inventory, Lab, Customers, Analytics
 
 ### Future (Phase 2+)
 
 - [ ] Orders: Filters, search, actions (refund, fulfill, etc.)
-- [ ] Product/inventory sync
+- [ ] Catalog: cross-store presence ("Visible in" across Retail / B2B / Bulk), product detail, create/edit
 - [ ] Customer lookups
 - [ ] Analytics dashboards
 - [ ] FGINV features (built in-app, not iframe)
@@ -162,6 +167,9 @@ const info = await invoke<any>("fetch_shop_info");
 - `fetch_shop_info()` — demo GraphQL query (shop name)
 - `list_orders(first?)` — list recent orders for active store (default 25, up to 100)
 - `get_order(order_id)` — fetch single order detail with line items (uses Shopify GID)
+- `list_inventory()` — every variant of the active store with per-location quantities (up to 1,500)
+- `list_products()` — every product of the active store, title-sorted, with variant count, price range, status and
+  featured image (50 per page, up to 1,000; `truncated: true` past that)
 
 ## Configuration
 

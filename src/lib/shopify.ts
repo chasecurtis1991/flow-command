@@ -142,6 +142,64 @@ export function invalidateInventory(): void {
   invEmit();
 }
 
+// ---- catalog (mirrors list_products in lib.rs) ----
+export interface ProductOption { name: string; values: string[] }
+export interface CatalogProduct {
+  id: string; // gid://shopify/Product/123
+  title: string;
+  handle: string;
+  status: string; // ACTIVE | DRAFT | ARCHIVED
+  productType: string | null; // null when blank in Shopify
+  vendor: string | null;
+  tags: string[];
+  variantCount: number;
+  minPrice: string; // "24.00 USD" (priceRangeV2.minVariantPrice); "" if missing
+  maxPrice: string;
+  totalInventory: number;
+  tracksInventory: boolean;
+  imageUrl: string | null; // featured media preview, ≤240px
+  options: ProductOption[]; // empty for default-variant-only products
+  updatedAt: string;
+}
+export interface CatalogResult {
+  products: CatalogProduct[];
+  truncated: boolean; // hit the 20-page cap (1,000 products)
+}
+
+// ---- catalog cache (same shape and semantics as the orders cache) ----
+export interface CatalogState { store: StoreId | null; status: OrdersStatus; data: CatalogResult | null; error: string | null; loadedAt: number }
+let catState: CatalogState = { store: null, status: "idle", data: null, error: null, loadedAt: 0 };
+const catSubs = new Set<() => void>();
+const catEmit = () => catSubs.forEach((fn) => fn());
+
+/** Load the catalog for `store`. Same contract as loadOrders: call after set_active_store resolved; never rejects. */
+export function loadCatalog(store: StoreId, force = false): Promise<CatalogState> {
+  if (!force && catState.store === store && catState.status !== "idle" && catState.status !== "error") return Promise.resolve(catState);
+  catState = { ...catState, store, status: "loading", error: null };
+  catEmit();
+  return invoke<CatalogResult>("list_products")
+    .then((data) => {
+      if (catState.store !== store) return catState; // store switched mid-flight
+      catState = { store, status: "data", data, error: null, loadedAt: Date.now() };
+      catEmit();
+      return catState;
+    })
+    .catch((e) => {
+      if (catState.store !== store) return catState;
+      catState = { ...catState, status: "error", error: String(e) };
+      catEmit();
+      return catState;
+    });
+}
+export const useCatalog = () =>
+  useSyncExternalStore((fn) => { catSubs.add(fn); return () => { catSubs.delete(fn); }; }, () => catState);
+/** Mark the cache stale: a mounted Catalog page reloads now, an unmounted one reloads on next visit. */
+export function invalidateCatalog(): void {
+  if (catState.status !== "data" && catState.status !== "error") return;
+  catState = { ...catState, status: "idle" };
+  catEmit();
+}
+
 // ---- formatting ----
 export function money(s: string | null | undefined): string {
   if (!s) return "—";
@@ -194,6 +252,27 @@ export const fulStatus = (s: string | null): { label: string; kind: Kind } => {
 /** Open fulfillment work: not fulfilled, and not closed/cancelled/refunded. */
 export const isOpenFulfillment = (o: Order) =>
   o.displayFulfillmentStatus !== "FULFILLED" && !o.closed && !o.cancelled && !["REFUNDED", "VOIDED"].includes(o.displayFinancialStatus ?? "");
+
+const PRODUCT_STATUS: Record<string, [string, Kind]> = { ACTIVE: ["Active", "green"], DRAFT: ["Draft", "amber"], ARCHIVED: ["Archived", "neutral"] };
+export const productStatus = (s: string): { label: string; kind: Kind } => {
+  const [label, kind] = PRODUCT_STATUS[s] ?? [titleCase(s), "neutral"];
+  return { label, kind };
+};
+/** Second line under a product title: option values (sizes), else tags, else the handle. */
+export function productProfile(p: CatalogProduct): string {
+  const opts = p.options.filter((o) => o.values.length).map((o) => o.values.join(", "));
+  if (opts.length) return opts.join(" · ");
+  if (p.tags.length) return p.tags.slice(0, 4).join(" · ");
+  return p.handle;
+}
+/** Stable swatch for products without media: a title-hashed hue in the design's green band (oklch 120–170). */
+export function swatchColor(seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+  return `oklch(0.32 0.04 ${120 + (h % 50)})`;
+}
+/** Shopify refused the products query: the app is missing the read_products scope on that store. */
+export const isScopeError = (e: string | null | undefined) => /read_products|access denied/i.test(e ?? "");
 
 /** Deep link into Shopify admin for an order GID. */
 export const orderAdminUrl = (store: StoreId, gid: string) =>
