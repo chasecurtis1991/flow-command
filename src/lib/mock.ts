@@ -1,5 +1,5 @@
 // Sample data ported verbatim from the Claude Design export for surfaces that have no backend yet
-// (FGINV inventory, COAs, customers, analytics, activity feed). Pages that render this
+// (FGINV inventory, the drift chart, activity feed, the ⌘K customer stubs). Pages that render this
 // show a "Sample data" pill. Replace each export with a Tauri command as backends land.
 import { useSyncExternalStore } from "react";
 import type { Kind } from "./shopify";
@@ -50,26 +50,6 @@ export const lotsSummary = () => `${lots.length} lots · ${lots.reduce((a, l) =>
 export const driftColor = (d: string) => (d === "0" ? T.mute : T.amber);
 export const coaColor = (c: Lot["coa"]) => (c === "Posted" ? T.green : c === "Pending" ? T.amber : T.red);
 
-// ---- Lab / COAs ----
-const coaRaw: [string, string, string, string, string, string, string, string, string, string][] = [
-  ["COA_SuverHaze_FG-24-0918.pdf", "Suver Haze", "Sep 10, 2026", "Columbia Labs", "FG-24-0918", "20.4%", "0.28%", "Needs review", "Suver Haze", "Not posted"],
-  ["COA_HawaiianHaze_FG-24-0902.pdf", "Hawaiian Haze", "Sep 4, 2026", "Columbia Labs", "FG-24-0902", "18.1%", "0.21%", "Parsed", "Hawaiian Haze", "Posted"],
-  ["COA_Lifter_FG-24-0827.pdf", "Lifter", "Aug 29, 2026", "SC Labs", "FG-24-0827", "19.6%", "0.24%", "Parsed", "Lifter", "Posted"],
-  ["COA_SpecialSauce_FG-24-0821.pdf", "Special Sauce", "Aug 23, 2026", "SC Labs", "FG-24-0821", "18.8%", "0.26%", "Parsed", "Special Sauce", "Posted"],
-  ["COA_SourSpaceCandy_FG-24-0815.pdf", "Sour Space Candy", "Aug 17, 2026", "Columbia Labs", "FG-24-0815", "18.4%", "0.19%", "Parsed", "Sour Space Candy", "Posted"],
-  ["scan_0801.pdf", "Bubba Kush biomass", "Aug 3, 2026", "—", "FG-24-0801", "—", "—", "Parse failed", "Unlinked", "Not posted"],
-  ["COA_Elektra_FG-24-0722.pdf", "Elektra", "Jul 24, 2026", "Columbia Labs", "FG-24-0722", "17.0%", "0.22%", "Parsed", "Elektra", "Posted"],
-  ["COA_CherryWine_FG-24-0715.pdf", "Cherry Wine", "Jul 17, 2026", "SC Labs", "FG-24-0715", "15.9%", "0.29%", "Parsed", "Cherry Wine", "Not posted"],
-  ["COA_CherryBlossom_FG-24-0708.pdf", "Cherry Blossom", "Jul 10, 2026", "SC Labs", "FG-24-0708", "14.6%", "0.17%", "Importing…", "Cherry Blossom (draft)", "Not posted"],
-];
-export const coas = coaRaw.map((c) => ({
-  file: c[0], strain: c[1], date: c[2], lab: c[3], batch: c[4], total: c[5], thc: c[6],
-  thcHot: parseFloat(c[6]) > 0.27, parse: c[7],
-  parseKind: (c[7] === "Parsed" ? "green" : c[7] === "Parse failed" ? "red" : c[7] === "Importing…" ? "neutral" : "amber") as Kind,
-  product: c[8], unlinked: c[8] === "Unlinked", posted: c[9], isPosted: c[9] === "Posted",
-}));
-export const unpostedCoaCount = coas.filter((c) => !c.isPosted).length;
-
 // ---- Customers ----
 const customerRaw: [string, string, string, string, number, number, string][] = [
   ["Cascade Botanicals LLC", "orders@cascadebotanicals.com", "Cascade Botanicals", "B2B / Wholesale", 31, 96420, "Today"],
@@ -86,14 +66,8 @@ export const customers = customerRaw.map((c) => ({
   initials: c[0].split(" ").slice(0, 2).map((w) => w[0]).join(""),
 }));
 
-// ---- Analytics ----
-export const barVals = [24, 31, 28, 35, 22, 19, 30, 33, 41, 29, 27, 36, 38, 31];
+// ---- Analytics (only the FGINV drift chart is still sample data; orders come from Shopify) ----
 export const driftVals = [4, 6, 3, 8, 12, 9, 5, 7, 14, 18, 22, 30, 39, 42];
-export const storeStats = [
-  { id: "retail", label: "Retail", orders: 318, rev: 28940, aov: 91.01 },
-  { id: "b2b", label: "B2B / Wholesale", orders: 64, rev: 142860, aov: 2232.19 },
-  { id: "bulk", label: "Bulk / Craft Flower", orders: 9, rev: 61200, aov: 6800 },
-] as const;
 
 // ---- Design system page ----
 export const tokens = [
