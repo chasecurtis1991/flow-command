@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useApp } from "../lib/app";
-import { STORES, getCredentials, saveCredentials, storeById, useOrders } from "../lib/shopify";
-import { Pill, SampleData, Status } from "../components/ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { prefs, useApp } from "../lib/app";
+import {
+  GOOGLE_PREFS, type GoogleConfig, type GoogleStatus, OPENROUTER_MODEL_PREF, type OpenRouterStatus, STORES, getCredentials, getOpenRouterStatus, googleConfig, googleStatus, saveCredentials, saveOpenRouterKey,
+  seedGoogleConfig, storeById, useOrders,
+} from "../lib/shopify";
+import { Pill, SampleData, Spinner, Status } from "../components/ui";
 
 type Creds = { status: "loading" | "saved" | "missing"; clientId?: string };
 const mask = (s: string) => (s.length > 8 ? `${s.slice(0, 4)}…${s.slice(-4)}` : "••••");
+type GoogleKey = keyof GoogleConfig;
+const GOOGLE_FIELDS: [GoogleKey, string, string, string][] = [
+  ["keyFile", "Service-account key file", "/Users/…/service-account.json", "path to the downloaded JSON key"],
+  ["sheetId", "Sheet id", "1M4q…", "docs.google.com/spreadsheets/d/<id>/edit"],
+  ["sheetTab", "Tab", "first tab", "blank = the first tab"],
+  ["folderId", "Drive folder id", "1lCD…", "drive.google.com/drive/folders/<id>"],
+];
+const readGoogleForm = () => Object.fromEntries(GOOGLE_FIELDS.map(([k]) => [k, prefs.get(GOOGLE_PREFS[k], "")])) as Record<GoogleKey, string>;
+const NO_STATUS: GoogleStatus = { configured: false, serviceAccountEmail: null, sheetReachable: false, sheetTitle: null, tabs: [], driveReachable: false, driveFolderName: null, error: null };
 
 export function Settings() {
   const { store, accent, setAccent, density, setDensity, toast } = useApp();
@@ -13,11 +26,46 @@ export function Settings() {
   const [creds, setCreds] = useState<Creds>({ status: "loading" });
   const [modal, setModal] = useState(false);
   const [push, setPush] = useState(true);
+  const [or, setOr] = useState<OpenRouterStatus | null>(null); // null = checking
+  const [orKey, setOrKey] = useState("");
+  const [orBusy, setOrBusy] = useState(false);
+  const [model, setModel] = useState(() => prefs.get<string>(OPENROUTER_MODEL_PREF, ""));
+  const [gForm, setGForm] = useState(readGoogleForm); // mirrors the four google.* prefs
+  const [g, setG] = useState<GoogleStatus | null>(null); // last Test connection result
+  const [gBusy, setGBusy] = useState<"import" | "test" | null>(null);
+
+  const setGField = (k: GoogleKey, v: string) => { prefs.set(GOOGLE_PREFS[k], v.trim()); setGForm((f) => ({ ...f, [k]: v })); };
+  const importG = () => {
+    setGBusy("import");
+    seedGoogleConfig()
+      .then((cfg) => {
+        if (!cfg) return toast("Nothing to import");
+        for (const [k] of GOOGLE_FIELDS) setGField(k, cfg[k] ?? "");
+        setG(null);
+        toast("Imported Google settings from the old dashboard");
+      })
+      .catch((e) => toast(`Import failed · ${e}`)).finally(() => setGBusy(null));
+  };
+  const testG = () => {
+    setGBusy("test");
+    googleStatus(googleConfig()).then(setG).catch((e) => setG({ ...NO_STATUS, error: String(e) })).finally(() => setGBusy(null));
+  };
+  /** One probe line: "—" when that id is blank, the name + a green pill when reachable, else the error. */
+  const probe = (id: string | null, ok: boolean, text: string) =>
+    !id ? <span className="sub" style={{ fontSize: 12 }}>—</span>
+    : ok ? <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}><span className="sub ellip" style={{ fontSize: 12 }}>{text}</span><Pill kind="green">reachable</Pill></span>
+    : <span className="ellip" style={{ fontSize: 12, color: "var(--red)" }} title={g?.error ?? undefined}>{g?.error ?? "unreachable"}</span>;
 
   const load = useCallback(() => {
     getCredentials().then((c) => setCreds({ status: "saved", clientId: c.clientId })).catch(() => setCreds({ status: "missing" }));
   }, []);
   useEffect(load, [load]);
+  const loadOr = useCallback(() => { getOpenRouterStatus().then(setOr).catch(() => setOr({ hasKey: false, keyHint: null, defaultModel: "" })); }, []);
+  useEffect(loadOr, [loadOr]);
+  const saveOr = (key: string) => {
+    setOrBusy(true);
+    saveOpenRouterKey(key).then((msg) => { toast(msg); setOrKey(""); loadOr(); }).catch((e) => toast(`Save failed · ${e}`)).finally(() => setOrBusy(false));
+  };
 
   const notSaved = creds.status === "missing" ? <Pill kind="amber">Not saved</Pill> : null;
   const activeStatus = cache.status === "data" ? <Status kind="green">Connected</Status>
@@ -38,6 +86,57 @@ export function Settings() {
         <div className="list-row">
           <span className="sub" style={{ fontSize: 12.5 }}>Stored in the macOS Keychain under com.flowgardens.command</span>
           <button className="btn btn-secondary btn-sm" onClick={() => setModal(true)}>Update credentials…</button>
+        </div>
+      </Group>
+
+      <Group title="OpenRouter · COA parsing">
+        <div className="list-row">
+          <span>API key</span>
+          {or === null ? <Status kind="mute">Checking…</Status> : or.hasKey ? <Pill kind="green">Key saved · ends in {or.keyHint}</Pill> : <Pill kind="amber">No key — parsing is disabled</Pill>}
+        </div>
+        <div className="list-row tall" style={{ gap: 8 }}>
+          <input type="password" className="input input-dark" placeholder="sk-or-…" value={orKey} style={{ flex: 1, minWidth: 0 }} disabled={orBusy}
+            onChange={(e) => setOrKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && orKey.trim() && saveOr(orKey.trim())} />
+          <button className="btn btn-primary btn-sm" disabled={!orKey.trim() || orBusy} onClick={() => saveOr(orKey.trim())}>{orBusy ? "Saving…" : "Save to Keychain"}</button>
+          {or?.hasKey && <button className="btn btn-secondary btn-sm" disabled={orBusy} onClick={() => saveOr("")}>Remove key</button>}
+        </div>
+        <div className="list-row tall" style={{ gap: 14 }}>
+          <span className="two-line"><span>Model</span><span className="second">OpenRouter model id; blank uses the default</span></span>
+          <input className="input input-dark mono" placeholder={or?.defaultModel || "default"} value={model} style={{ width: 280, fontSize: 12 }}
+            onChange={(e) => { setModel(e.target.value); prefs.set(OPENROUTER_MODEL_PREF, e.target.value.trim()); }} />
+        </div>
+        <div className="list-row">
+          <span className="sub" style={{ fontSize: 12.5 }}>Stored in the macOS Keychain · used by Parse / Re-parse on the Lab page</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => void openUrl("https://openrouter.ai/keys")}>openrouter.ai/keys ↗</button>
+        </div>
+      </Group>
+
+      <Group title="Google · COA mirror">
+        {GOOGLE_FIELDS.map(([k, label, ph, help]) => (
+          <div key={k} className="list-row tall" style={{ gap: 14 }}>
+            <span className="two-line"><span>{label}</span><span className="second">{help}</span></span>
+            <input className="input input-dark mono" placeholder={ph} value={gForm[k]} style={{ width: 340, fontSize: 12 }} disabled={gBusy === "import"} spellCheck={false}
+              onChange={(e) => setGField(k, e.target.value)} onKeyDown={(e) => e.key === "Enter" && testG()} />
+          </div>
+        ))}
+        <div className="list-row tall" style={{ gap: 8 }}>
+          <span className="sub" style={{ fontSize: 12.5, flex: 1 }}>Saved as you type · the wizard's Mirror toggle and the detail pane's Mirror to Google use these</span>
+          <button className="btn btn-control btn-sm" disabled={!!gBusy} title="Read the old dashboard's .env" onClick={importG}>{gBusy === "import" ? "Importing…" : "Import from old dashboard"}</button>
+          <button className="btn btn-secondary btn-sm" disabled={!!gBusy} onClick={testG}>Test connection</button>
+        </div>
+        {gBusy === "test" ? <div className="list-row"><Status kind="mute"><Spinner size={12} /> Testing the Sheet and the folder as the service account…</Status></div> : g && (
+          <>
+            <div className="list-row">
+              <span className="two-line"><span>Service account</span><span className="second">Share the Sheet and the Drive folder with this address as Editor</span></span>
+              {g.serviceAccountEmail ? <span className="mono sub ellip" style={{ fontSize: 12 }}>{g.serviceAccountEmail}</span> : <Pill kind="amber">{g.error ?? "Not configured"}</Pill>}
+            </div>
+            <div className="list-row"><span>Sheet</span>{probe(googleConfig().sheetId, g.sheetReachable, `${g.sheetTitle} · tabs: ${g.tabs.join(", ")}`)}</div>
+            <div className="list-row"><span>Drive</span>{probe(googleConfig().folderId, g.driveReachable, g.driveFolderName ?? "")}</div>
+          </>
+        )}
+        <div className="list-row">
+          <span className="sub" style={{ fontSize: 12.5 }}>Drive gets the PDF named after the strain (same name = updated in place) · the Sheet row is upserted by batch id</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => void openUrl("https://console.cloud.google.com/")}>console.cloud.google.com ↗</button>
         </div>
       </Group>
 
