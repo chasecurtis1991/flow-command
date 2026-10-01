@@ -94,6 +94,18 @@ Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
   `src/components/DataTable.tsx` (`TableHead`, `TableRow`, `ColumnsMenu`, `FilterChips`, `FilterButton`,
   `PageSizePicker`). Catalog / Inventory sort and filter client-side; Orders maps the same state to Shopify.
 
+### Inventory: Adjust stock
+On Inventory · Shopify, **±** on a variant row (or a single-variant product row) opens **Adjust stock**. Pick the location
+and a reason (correction, cycle count, damaged, shrinkage, received, restock, promotion / sample, other), then enter
+either **Change by ±** (`-2` removes two) or **Counted available** (the app works out the difference). The review shows
+available and on-hand before → after; **Apply** writes it with `inventoryAdjustQuantities` on the `available` state.
+
+Safety: the store is pinned when the dialog opens, the count you saw is sent as `changeFromQuantity` (if it moved in
+Shopify meanwhile the write is refused — **Sync & close** and review again), and each reviewed change carries an
+idempotency key, so **Retry** after a network error can't apply it twice. After the write the level is re-read from
+Shopify and the table refreshes. Untracked items have no ±. Needs `write_inventory`. Only the first 3 locations per
+item are loaded. Shopify is treated as the owner of these counts until FGINV has a backend.
+
 ### Customers
 The top 100 customers of the active store, most recently updated first, with orders, lifetime spend, company,
 location and last order. The search box runs in Shopify (relevance-ranked, so it covers every customer, not just

@@ -226,7 +226,7 @@ export function buildOrdersQuery(f: OrdersFilter): string {
 }
 
 // ---- inventory (mirrors list_inventory in lib.rs) ----
-export interface InventoryLevel { location: string; available: number; onHand: number; committed: number }
+export interface InventoryLevel { location: string; locationId: string; available: number; onHand: number; committed: number }
 export interface InventoryVariant {
   id: string;
   productId: string; // gid://shopify/Product/123
@@ -235,6 +235,7 @@ export interface InventoryVariant {
   sku: string | null;
   productStatus: string; // ACTIVE | DRAFT | ARCHIVED
   tracked: boolean;
+  inventoryItemId: string | null; // null when the products-only fallback ran
   available: number; // inventoryQuantity, all locations
   levels: InventoryLevel[]; // empty when the products-only fallback ran
 }
@@ -273,6 +274,15 @@ export function groupInventory(variants: InventoryVariant[]): InventoryProduct[]
   for (const p of by.values()) p.leaf = p.variants.length === 1;
   return [...by.values()];
 }
+
+// ---- inventory adjust (mirrors inventory_adjust.rs) ----
+export const ADJUST_REASONS: [string, string][] = [
+  ["correction", "Correction"], ["cycle_count_available", "Cycle count"], ["damaged", "Damaged"], ["shrinkage", "Shrinkage / loss"],
+  ["received", "Received"], ["restock", "Restock (return)"], ["promotion", "Promotion / sample"], ["other", "Other"],
+];
+export interface AdjustRequest { storeId: StoreId; inventoryItemId: string; locationId: string; delta: number; reason: string; changeFrom: number; idempotencyKey: string }
+export interface AdjustResult { delta: number; available: number; onHand: number }
+export const adjustInventory = (request: AdjustRequest) => invoke<AdjustResult>("adjust_inventory", { request });
 
 // ---- inventory cache (same shape and semantics as the orders cache) ----
 export interface InventoryState { store: StoreId | null; status: OrdersStatus; data: InventoryResult | null; error: string | null; loadedAt: number }

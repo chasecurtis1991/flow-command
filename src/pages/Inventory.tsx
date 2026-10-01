@@ -9,6 +9,7 @@ import {
 import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill, SampleData } from "../components/ui";
 import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/DataTable";
+import { AdjustDialog } from "./AdjustDialog";
 
 // FGINV drift banner still derives from the design sample until FGINV has a backend.
 const drifted = shopInv.filter((v) => v.sync.startsWith("Drift"));
@@ -18,13 +19,16 @@ const statusPill = (p: InventoryProduct): { label: string; kind: Kind } => (p.tr
 /** Summed across locations; null when the products-only fallback ran (no per-location levels). */
 const sum = (v: InventoryVariant, k: "onHand" | "committed") => (v.levels.length ? v.levels.reduce((a, l) => a + l[k], 0) : null);
 const leafSku = (p: InventoryProduct) => (p.leaf ? p.variants[0].sku : null);
+const canAdjust = (v: InventoryVariant) => v.tracked && !!v.inventoryItemId && v.levels.some((l) => l.locationId);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 // The tree: useTable only ever sees product rows (sort / filter / count are per product); variant rows are rendered
 // under their open product afterwards, so sortValue / filter guard on kind and only read `p`.
 type InvRow = { kind: "product"; p: InventoryProduct } | { kind: "variant"; p: InventoryProduct; v: InventoryVariant };
 
-function inventoryColumns(store: StoreId, isOpen: (p: InventoryProduct) => boolean, toggle: (id: string) => void): ColumnDef<InvRow>[] {
+type Adjusting = { p: InventoryProduct; v: InventoryVariant };
+
+function inventoryColumns(store: StoreId, isOpen: (p: InventoryProduct) => boolean, toggle: (id: string) => void, adjust: (a: Adjusting) => void): ColumnDef<InvRow>[] {
   return [
     {
       id: "product", label: "Product", width: "minmax(0, 1.6fr)", cellClass: (r) => (r.kind === "product" ? "ellip" : "ellip child-cell"),
@@ -62,10 +66,15 @@ function inventoryColumns(store: StoreId, isOpen: (p: InventoryProduct) => boole
       cell: (r) => { if (r.kind !== "product") return null; const st = statusPill(r.p); return <Pill kind={st.kind}>{st.label}</Pill>; }, // status is product-level; UNTRACKED tags mark variants
     },
     {
-      id: "open", label: "", title: "Open in Shopify", width: "32px", hideable: false,
-      cell: (r) => r.kind === "product" && (
-        <button className="icon-btn" title="Open in Shopify" aria-label="Open in Shopify" onClick={(e) => { e.stopPropagation(); void openUrl(adminUrl(store, r.p.id)); }}>{"↗"}</button>
-      ),
+      id: "open", label: "", title: "Adjust stock · Open in Shopify", width: "64px", hideable: false, cellStyle: () => ({ display: "flex", alignItems: "center", gap: 2 }),
+      cell: (r) => {
+        const v = r.kind === "variant" ? r.v : r.p.leaf ? r.p.variants[0] : null; // multi-variant products adjust per variant row
+        return <>
+          {v && canAdjust(v) ? <button className="icon-btn" title="Adjust stock" aria-label={`Adjust stock for ${v.variantTitle ?? r.p.title}`} onClick={(e) => { e.stopPropagation(); adjust({ p: r.p, v }); }}>±</button>
+            : <span style={{ display: "inline-block", width: 22 }} />}
+          {r.kind === "product" && <button className="icon-btn" title="Open in Shopify" aria-label="Open in Shopify" onClick={(e) => { e.stopPropagation(); void openUrl(adminUrl(store, r.p.id)); }}>{"↗"}</button>}
+        </>;
+      },
     },
   ];
 }
@@ -81,6 +90,9 @@ export function Inventory() {
   const [lowOnly, setLowOnly] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const lots = useLots();
+  // The store is pinned when ± is clicked (the store whose data was shown), so a store switch can't retarget the write.
+  const [adjusting, setAdjusting] = useState<(Adjusting & { storeId: StoreId }) | null>(null);
+  const onAdjust = useCallback((a: Adjusting) => { if (inv.store) setAdjusting({ ...a, storeId: inv.store }); }, [inv.store]);
 
   useEffect(() => {
     if (storeReady && tab === "shopify" && (inv.status === "idle" || (inv.store !== store && inv.status !== "loading"))) void loadInventory(store);
@@ -101,7 +113,7 @@ export function Inventory() {
   const isOpen = useCallback((p: InventoryProduct) => filtering || expanded.has(p.id), [filtering, expanded]);
   const toggle = useCallback((id: string) => setExpanded((e) => { const n = new Set(e); if (!n.delete(id)) n.add(id); return n; }), []);
   const anyClosed = !products.length || products.some((p) => !p.leaf && !expanded.has(p.id));
-  const columns = useMemo(() => inventoryColumns(store, isOpen, toggle), [store, isOpen, toggle]);
+  const columns = useMemo(() => inventoryColumns(store, isOpen, toggle, onAdjust), [store, isOpen, toggle, onAdjust]);
   const table = useTable<InvRow>({ id: "inventory", columns, rows: productRows });
   const rows = table.rowsOut;
   const shown = rows.reduce((a, r) => a + (r.p.leaf ? 1 : isOpen(r.p) ? kids(r.p).length : 0), 0); // leaves + visible children
@@ -140,13 +152,14 @@ export function Inventory() {
 
   return (
     <section className="screen screen-full">
+      {adjusting && <AdjustDialog variant={adjusting.v} productTitle={adjusting.p.title} storeId={adjusting.storeId} onClose={() => setAdjusting(null)} />}
       <div className="tabs">
         <button className={`tab${tab === "shopify" ? " active" : ""}`} onClick={() => setTab("shopify")}>Shopify</button>
         <button className={`tab${tab === "fginv" ? " active" : ""}`} onClick={() => setTab("fginv")}>FGINV <span className="tag-caps">SOURCE OF TRUTH</span></button>
         <div className="spacer" />
         {tab === "shopify" ? (
           <>
-            <span className="mute" style={{ fontSize: 12 }}>Read-only mirror of Shopify</span>
+            <span className="mute" style={{ fontSize: 12 }}>Mirror of Shopify · ± adjusts stock</span>
             {inv.status === "data" && <Pill kind="green" sm>Live</Pill>}
           </>
         ) : <SampleData />}
@@ -191,7 +204,7 @@ export function Inventory() {
             <button className="action-card" onClick={() => toast("Transfers ship in a later release")}>
               <span className="name">Transfer</span><span className="desc">Move quantity between Warehouse, Retail floor and Quarantine.</span><span className="cta">New transfer →</span>
             </button>
-            <button className="action-card" onClick={() => toast("Adjustments ship in a later release")}>
+            <button className="action-card" onClick={() => { setTab("shopify"); toast("Adjust Shopify stock with ± on a variant row"); }}>
               <span className="name">Adjust</span><span className="desc">Cycle count corrections, shrink, samples and destroyed product — with a reason code.</span><span className="cta">New adjustment →</span>
             </button>
           </div>

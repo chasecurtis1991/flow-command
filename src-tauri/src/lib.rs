@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+mod inventory_adjust;
 mod variant_split;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
@@ -138,6 +139,8 @@ pub struct LineItem {
 #[serde(rename_all = "camelCase")]
 pub struct InventoryLevel {
     pub location: String,
+    /// gid://shopify/Location/123 — the write target for adjust_inventory.
+    pub location_id: String,
     pub available: i64,
     pub on_hand: i64,
     pub committed: i64,
@@ -156,6 +159,8 @@ pub struct InventoryVariant {
     /// ACTIVE | DRAFT | ARCHIVED
     pub product_status: String,
     pub tracked: bool,
+    /// gid://shopify/InventoryItem/123; None when the products-only fallback ran.
+    pub inventory_item_id: Option<String>,
     /// inventoryQuantity across all locations.
     pub available: i64,
     /// Empty when the products-only fallback was used.
@@ -903,7 +908,7 @@ const INVENTORY_PAGE_CAP: usize = 15;
 fn inventory_query(after: Option<&str>, with_levels: bool) -> String {
     let after = after.map_or("null".to_string(), |c| format!("\"{c}\""));
     let levels = if with_levels {
-        r#"inventoryItem { tracked inventoryLevels(first: 3) { edges { node { location { name } quantities(names: ["available", "on_hand", "committed"]) { name quantity } } } } }"#
+        r#"inventoryItem { id tracked inventoryLevels(first: 3) { edges { node { location { id name } quantities(names: ["available", "on_hand", "committed"]) { name quantity } } } } }"#
     } else {
         ""
     };
@@ -936,6 +941,7 @@ fn parse_variants(page: &serde_json::Value) -> Vec<InventoryVariant> {
                                     };
                                     Some(InventoryLevel {
                                         location: n["location"]["name"].as_str()?.to_string(),
+                                        location_id: n["location"]["id"].as_str().unwrap_or_default().to_string(),
                                         available: qty("available"),
                                         on_hand: qty("on_hand"),
                                         committed: qty("committed"),
@@ -958,6 +964,7 @@ fn parse_variants(page: &serde_json::Value) -> Vec<InventoryVariant> {
                             .map(String::from),
                         product_status: node["product"]["status"].as_str()?.to_string(),
                         tracked: item["tracked"].as_bool().unwrap_or(true),
+                        inventory_item_id: item["id"].as_str().map(String::from),
                         available: node["inventoryQuantity"].as_i64().unwrap_or(0),
                         levels,
                     })
@@ -4242,6 +4249,7 @@ pub fn run() {
             list_orders_page,
             get_order,
             list_inventory,
+            inventory_adjust::adjust_inventory,
             list_products,
             variant_split::prepare_variant_split,
             variant_split::split_product_variant,
