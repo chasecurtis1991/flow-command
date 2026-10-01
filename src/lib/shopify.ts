@@ -43,6 +43,7 @@ export interface OrderDetail extends Order {
   totalShipping?: string | null;
   lineItems: LineItem[];
   note?: string | null;
+  tags: string[];
   shippingAddress?: string | null;
   customerOrdersCount?: number | null;
   channel?: string | null;
@@ -54,6 +55,9 @@ export interface Credentials { clientId: string; clientSecret: string }
 export const getActiveStore = () => invoke<StoreDef>("get_active_store");
 export const setActiveStore = (storeId: StoreId) => invoke<StoreDef>("set_active_store", { storeId });
 export const getOrder = (orderId: string) => invoke<OrderDetail>("get_order", { orderId });
+/** Mirrors order_notes.rs: note = null leaves it alone; tags are added/removed individually (others are kept). */
+export interface NoteTagsRequest { storeId: StoreId; orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] }
+export const updateOrderNoteTags = (request: NoteTagsRequest) => invoke<{ note: string | null; tags: string[] }>("update_order_note_tags", { request });
 export const fetchShopInfo = (storeId?: StoreId) => invoke<ShopInfo>("fetch_shop_info", { storeId });
 export const getCredentials = () => invoke<Credentials>("get_shopify_credentials");
 export const saveCredentials = (clientId: string, clientSecret: string) =>

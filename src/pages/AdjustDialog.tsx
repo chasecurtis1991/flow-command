@@ -33,7 +33,7 @@ export function AdjustDialog({ variant, productTitle, storeId, onClose }: { vari
   // One key per reviewed proposal: editing anything mints a new one; retrying the same proposal reuses it so Shopify dedupes.
   const key = useMemo(() => crypto.randomUUID(), [locationId, delta, reason]);
   const label = `${productTitle}${variant.variantTitle ? ` · ${variant.variantTitle}` : ""}`;
-  const stale = !!error?.startsWith("The count changed");
+  const stale = !!error?.includes("The count changed");
   const signed = (d: number) => (d > 0 ? `+${d}` : `${d}`);
 
   async function apply() {

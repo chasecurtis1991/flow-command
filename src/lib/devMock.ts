@@ -61,13 +61,26 @@ const orders: Order[] = [
     };
   }),
 ];
+// Browser-preview note/tag edits, kept in memory (same checks as order_notes.rs).
+const noteEdits = new Map<string, { note?: string | null; tags?: string[] }>();
+function updateNoteTags(a: Record<string, unknown>) {
+  const r = a.request as { orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] };
+  const cur = detail(r.orderId);
+  if (r.note !== null && (cur.note ?? null) !== (r.expectedNote ?? null)) throw new Error("The note changed in Shopify since this order was loaded — reload the order and review again.");
+  const lower = r.removeTags.map((t) => t.toLowerCase());
+  const tags = [...cur.tags.filter((t) => !lower.includes(t.toLowerCase())), ...r.addTags.filter((t) => !cur.tags.some((c) => c.toLowerCase() === t.toLowerCase()))];
+  const note = r.note === null ? cur.note ?? null : r.note.trim() ? r.note.trimEnd() : null;
+  noteEdits.set(r.orderId, { note, tags });
+  return { note, tags };
+}
 const detail = (id: string): OrderDetail => {
   const i = orders.findIndex((o) => o.id === id);
   if (i < 0) throw new Error("Order not found");
   const o = template(i);
   const subtotal = o[10].reduce((a, li) => a + li[2] * li[3], 0);
   return {
-    ...orders[i], subtotalPrice: usd(subtotal), totalTax: usd(0), totalShipping: usd(Math.max(0, o[3] - subtotal)), note: o[11],
+    ...orders[i], subtotalPrice: usd(subtotal), totalTax: usd(0), totalShipping: usd(Math.max(0, o[3] - subtotal)),
+    note: noteEdits.get(id)?.note !== undefined ? noteEdits.get(id)!.note : o[11], tags: noteEdits.get(id)?.tags ?? (i % 3 === 0 ? ["vip"] : []),
     shippingAddress: i < ORDER_SEED ? o[9] : `${orders[i].customerName}\n${o[9].split("\n").slice(1).join("\n")}`, customerOrdersCount: o[8], channel: o[6],
     lineItems: o[10].map((li) => ({ title: li[0], sku: li[1], quantity: li[2], price: usd(li[3]) })),
   };
@@ -462,7 +475,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -479,6 +492,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_orders": return ordersPage({ first: args.first ?? 50 }).orders;
     case "list_orders_page": return ordersPage(args);
     case "get_order": return detail(String(args.orderId));
+    case "update_order_note_tags": return updateNoteTags(args);
     case "list_inventory": return inventory();
     case "adjust_inventory": return adjust(args);
     case "list_products": return catalog();

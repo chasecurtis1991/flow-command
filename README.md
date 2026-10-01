@@ -76,6 +76,14 @@ scheduled) plus `status:open`.
 
 Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
 
+### Orders: notes & tags
+In the order detail pane, **Notes & tags → Edit** lets you change the note, remove tags (× strikes one out; click again
+to keep it) and add tags (type, then Enter or comma). The footer summarises the change; **Save to Shopify** (or ⌘↩ in
+the note) sends only what changed. Tags go through `tagsAdd` / `tagsRemove`, so tags you didn't touch — or that
+another app added meanwhile — are kept. The note is re-read first: if someone changed it since the order loaded, the
+save is refused and **Reload order** shows the current one. Retrying after a network error is safe. The store is
+pinned when you click Edit. Needs `write_orders`.
+
 ### Table controls (Orders, Catalog table view, Inventory · Shopify)
 - **Sort**: click a column header (buttons; `aria-sort` is set). First click uses the column's natural
   direction (dates / amounts descending), the next click flips it.

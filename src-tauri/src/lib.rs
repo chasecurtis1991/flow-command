@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 mod inventory_adjust;
+mod order_notes;
 mod variant_split;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
@@ -119,6 +120,8 @@ pub struct OrderDetail {
     pub cancelled: bool,
     pub total_shipping: Option<String>,
     pub note: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Formatted shipping address lines joined with "\n".
     pub shipping_address: Option<String>,
     pub customer_orders_count: Option<u64>,
@@ -769,6 +772,7 @@ async fn get_order(order_id: String) -> Result<OrderDetail, String> {
                 closed
                 cancelledAt
                 note
+                tags
                 sourceName
                 totalShippingPriceSet {{
                     shopMoney {{
@@ -888,6 +892,10 @@ async fn get_order(order_id: String) -> Result<OrderDetail, String> {
             .as_str()
             .filter(|s| !s.trim().is_empty())
             .map(|s| s.to_string()),
+        tags: order["tags"]
+            .as_array()
+            .map(|ts| ts.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
         shipping_address: order["shippingAddress"]["formatted"].as_array().map(|lines| {
             lines
                 .iter()
@@ -4248,6 +4256,7 @@ pub fn run() {
             list_orders,
             list_orders_page,
             get_order,
+            order_notes::update_order_note_tags,
             list_inventory,
             inventory_adjust::adjust_inventory,
             list_products,
