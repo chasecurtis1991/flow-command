@@ -5,7 +5,7 @@ import {
   STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById, invalidateInventory,
   invalidateCatalog, invalidateOrdersTable, invalidateCustomers, invalidatePresence, invalidateAnalytics, invalidateCoas, loadCatalog, useCatalog, useCoas,
 } from "../lib/shopify";
-import { customers, addLot } from "../lib/mock";
+import { customers } from "../lib/mock";
 import { Icon, type IconName } from "./icons";
 
 const NAV: { path: string; label: string; icon: IconName }[] = [
@@ -36,7 +36,8 @@ export function Layout() {
   const [accent, setAccent] = useState<Accent>(() => prefs.get("accent", "blue", ["blue", "green"] as const));
   const [density, setDensity] = useState<Density>(() => prefs.get("density", "comfortable", ["compact", "comfortable"] as const));
   const [palette, setPalette] = useState(false);
-  const [sheet, setSheet] = useState(false);
+  // Receive opens the Shopify receiving dialog on Inventory (?action=receive), from Home, ⌘⇧R and the palette.
+  const openReceive = useCallback(() => navigate("/inventory?action=receive"), [navigate]);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const toastTimer = useRef(0);
 
@@ -89,23 +90,23 @@ export function Layout() {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === "k") { e.preventDefault(); setPalette((p) => !p); return; }
-      if (e.key === "Escape") { setPalette(false); setSheet(false); return; }
+      if (e.key === "Escape") { setPalette(false); return; }
       if (!mod) return;
       if (e.key === "\\") { e.preventDefault(); setCollapsed((c) => !c); return; }
       if (e.key === "1" || e.key === "2" || e.key === "3") { e.preventDefault(); void setStore(STORES[Number(e.key) - 1].id); }
-      else if (k === "r" && e.shiftKey) { e.preventDefault(); setSheet(true); }
+      else if (k === "r" && e.shiftKey) { e.preventDefault(); openReceive(); }
       else if (k === "r") { e.preventDefault(); refresh(); }
       else if (k === "f") { e.preventDefault(); document.querySelector<HTMLInputElement>(".content input.input")?.focus(); }
       else if (e.key === ",") { e.preventDefault(); navigate("/settings"); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setStore, refresh, navigate]);
+  }, [setStore, refresh, navigate, openReceive]);
 
   const ctx = useMemo<AppCtx>(() => ({
     store, setStore, storeReady, accent, setAccent, density, setDensity, toast,
-    openPalette: () => setPalette(true), openSheet: () => setSheet(true), refresh,
-  }), [store, setStore, storeReady, accent, density, toast, refresh]);
+    openPalette: () => setPalette(true), openSheet: openReceive, refresh,
+  }), [store, setStore, storeReady, accent, density, toast, refresh, openReceive]);
 
   const title = TITLES[pathname] ?? "Flow Command";
   const openCount = orders.status === "data" ? orders.orders.filter(isOpenFulfillment).length : 0;
@@ -200,16 +201,10 @@ export function Layout() {
             onClose={() => setPalette(false)}
             actions={{
               refresh,
-              openSheet: () => setSheet(true),
+              openSheet: openReceive,
               switchB2B: () => void setStore("b2b"),
               go: (path: string) => navigate(path),
             }}
-          />
-        )}
-        {sheet && (
-          <ReceiveSheet
-            onClose={() => setSheet(false)}
-            onDone={(msg) => { setSheet(false); navigate("/inventory?tab=fginv"); toast(msg); }}
           />
         )}
       </div>
@@ -287,7 +282,7 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
       label: "Actions",
       items: ([
         ["Refresh all stores", "Sync orders + inventory", "⌘R", actions.refresh],
-        ["Receive inventory", "New FGINV lot", "⌘⇧R", actions.openSheet],
+        ["Receive inventory", "Add stock in Shopify", "⌘⇧R", actions.openSheet],
         ["Switch store → B2B / Wholesale", "", "⌘2", actions.switchB2B],
         ["Import COA", "Parse a lab PDF", "", () => actions.go("/lab")],
       ] as [string, string, string, () => void][]).filter((a) => match(a[0])).map((a) => mk("Action", a[0], a[1], a[2], a[3])),
@@ -347,50 +342,3 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
   );
 }
 
-// ---------- Receive inventory sheet ----------
-function ReceiveSheet({ onClose, onDone }: { onClose: () => void; onDone: (toast: string) => void }) {
-  const today = new Date();
-  const lotId = `FG-${String(today.getFullYear()).slice(-2)}-${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
-  const [strain, setStrain] = useState("Suver Haze");
-  const [lot, setLot] = useState(lotId);
-  const [weight, setWeight] = useState("");
-  const [loc, setLoc] = useState("Warehouse");
-  const [coa, setCoa] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-
-  const submit = () => {
-    const w = parseFloat(weight);
-    if (!strain.trim()) return setErr("Strain is required");
-    if (!lot.trim()) return setErr("Lot ID is required");
-    if (!(w > 0)) return setErr("Weight must be greater than 0");
-    addLot({
-      lot: lot.trim(), strain: strain.trim(),
-      received: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" }).format(today),
-      onhand: `${w.toFixed(1)} lb`, drift: "0", coa: coa.trim() ? "Pending" : "Pending",
-    });
-    onDone(`Lot ${lot.trim()} received · ${w.toFixed(1)} lb ${strain.trim()}`);
-  };
-
-  return (
-    <div className="overlay center" onClick={onClose}>
-      <div className="dialog sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Receive lot">
-        <div className="sheet-head">
-          <div className="title">Receive lot</div>
-          <div className="why">Creates an FGINV lot. Shopify is updated on the next push.</div>
-        </div>
-        <div className="sheet-body">
-          <label className="field full">Strain / product<input className="input input-dark" value={strain} onChange={(e) => setStrain(e.target.value)} /></label>
-          <label className="field">Lot ID<input className="input input-dark mono" value={lot} onChange={(e) => setLot(e.target.value)} /></label>
-          <label className="field">Weight (lb)<input className={`input input-dark num${err && !(parseFloat(weight) > 0) ? " error" : ""}`} placeholder="0.0" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} /></label>
-          <label className="field">Location<input className="input input-dark" value={loc} onChange={(e) => setLoc(e.target.value)} /></label>
-          <label className="field">COA<input className="input input-dark dashed" placeholder="Link or drop PDF" value={coa} onChange={(e) => setCoa(e.target.value)} /></label>
-          {err && <div className="full" style={{ fontSize: 11.5, color: "var(--red)", marginTop: -4 }}>{err}</div>}
-        </div>
-        <div className="sheet-foot">
-          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={submit}>Receive lot</button>
-        </div>
-      </div>
-    </div>
-  );
-}

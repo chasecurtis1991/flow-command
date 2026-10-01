@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ADJUST_REASONS, adjustInventory, invalidateInventory, storeById, type AdjustResult, type InventoryVariant, type StoreId } from "../lib/shopify";
+import { ADJUST_REASONS, adjustInventory, invalidateInventory, storeById, type InventoryVariant, type StoreId } from "../lib/shopify";
 import { Pill } from "../components/ui";
 
 type Mode = "by" | "count";
@@ -16,7 +16,7 @@ export function AdjustDialog({ variant, productTitle, storeId, onClose }: { vari
   const [reason, setReason] = useState("correction");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AdjustResult | null>(null);
+  const [result, setResult] = useState<{ delta: number; available: number; onHand: number } | null>(null);
 
   useEffect(() => {
     const el = dialog.current!;
@@ -40,7 +40,10 @@ export function AdjustDialog({ variant, productTitle, storeId, onClose }: { vari
     if (!valid || !level || !variant.inventoryItemId || busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(null);
     try {
-      setResult(await adjustInventory({ storeId, inventoryItemId: variant.inventoryItemId, locationId, delta: delta!, reason, changeFrom: level.available, idempotencyKey: key }));
+      const [after] = await adjustInventory({
+        storeId, reason, idempotencyKey: key, changes: [{ inventoryItemId: variant.inventoryItemId, locationId, delta: delta!, changeFrom: level.available }],
+      });
+      setResult({ delta: delta!, available: after.available, onHand: after.onHand });
       invalidateInventory();
     } catch (e) {
       setError(String(e));

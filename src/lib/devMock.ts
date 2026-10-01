@@ -194,16 +194,19 @@ const invVariants: InventoryVariant[] = INV_RAW.map((v, i) => {
     ] : [],
   };
 });
-/** Browser-preview adjust: same checks as inventory_adjust.rs (stale count, zero delta), mutates the sample in memory. */
+/** Browser-preview adjust/receive/transfer: same checks as inventory_adjust.rs (stale counts, zero lines), all-or-nothing, in memory. */
 function adjust(a: Record<string, unknown>) {
-  const r = a.request as { inventoryItemId: string; locationId: string; delta: number; changeFrom: number };
-  const v = invVariants.find((x) => x.inventoryItemId === r.inventoryItemId);
-  const l = v?.levels.find((x) => x.locationId === r.locationId);
-  if (!v || !l) throw new Error("Missing inventory item or location id — sync inventory and try again.");
-  if (r.delta === 0) throw new Error("Adjustment is 0 — nothing to change.");
-  if (l.available !== r.changeFrom) throw new Error("The count changed in Shopify since it was loaded — sync and review again.");
-  l.available += r.delta; l.onHand += r.delta; v.available += r.delta;
-  return { delta: r.delta, available: l.available, onHand: l.onHand };
+  const r = a.request as { changes: { inventoryItemId: string; locationId: string; delta: number; changeFrom: number }[] };
+  const targets = r.changes.map((c) => {
+    const v = invVariants.find((x) => x.inventoryItemId === c.inventoryItemId);
+    const l = v?.levels.find((x) => x.locationId === c.locationId);
+    if (!v || !l) throw new Error("An item isn't stocked at that location in Shopify — stock it there first.");
+    if (c.delta === 0) throw new Error("A line has a quantity of 0 — remove it or enter a number.");
+    if (l.available !== c.changeFrom) throw new Error("The count changed in Shopify since it was loaded — sync and review again.");
+    return { v, l, c };
+  });
+  for (const { v, l, c } of targets) { l.available += c.delta; l.onHand += c.delta; v.available += c.delta; }
+  return targets.map(({ l, c }) => ({ inventoryItemId: c.inventoryItemId, locationId: c.locationId, available: l.available, onHand: l.onHand }));
 }
 const inventory = (): InventoryResult => ({
   variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),

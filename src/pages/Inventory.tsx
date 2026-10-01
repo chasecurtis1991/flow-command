@@ -10,6 +10,7 @@ import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill, SampleData } from "../components/ui";
 import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/DataTable";
 import { AdjustDialog } from "./AdjustDialog";
+import { type MoveMode, StockMoveDialog } from "./StockMoveDialog";
 
 // FGINV drift banner still derives from the design sample until FGINV has a backend.
 const drifted = shopInv.filter((v) => v.sync.startsWith("Drift"));
@@ -81,7 +82,7 @@ function inventoryColumns(store: StoreId, isOpen: (p: InventoryProduct) => boole
 
 export function Inventory() {
   const navigate = useNavigate();
-  const { store, storeReady, toast, openSheet } = useApp();
+  const { store, storeReady, toast } = useApp();
   const inv = useInventory();
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "fginv" ? "fginv" : "shopify";
@@ -92,11 +93,21 @@ export function Inventory() {
   const lots = useLots();
   // The store is pinned when ± is clicked (the store whose data was shown), so a store switch can't retarget the write.
   const [adjusting, setAdjusting] = useState<(Adjusting & { storeId: StoreId }) | null>(null);
+  // Receive / Transfer: opened from the toolbar, the FGINV cards, or ?action=receive|transfer (Home, ⌘⇧R, palette).
+  const [move, setMove] = useState<{ mode: MoveMode; storeId: StoreId } | null>(null);
+  const openMove = useCallback((mode: MoveMode) => { if (inv.store && inv.status === "data") setMove({ mode, storeId: inv.store }); }, [inv.store, inv.status]);
+  const action = params.get("action");
+  useEffect(() => {
+    if ((action === "receive" || action === "transfer") && inv.status === "data" && inv.store === store) {
+      openMove(action);
+      setParams({}, { replace: true });
+    }
+  }, [action, inv.status, inv.store, store, openMove, setParams]);
   const onAdjust = useCallback((a: Adjusting) => { if (inv.store) setAdjusting({ ...a, storeId: inv.store }); }, [inv.store]);
 
   useEffect(() => {
-    if (storeReady && tab === "shopify" && (inv.status === "idle" || (inv.store !== store && inv.status !== "loading"))) void loadInventory(store);
-  }, [storeReady, tab, store, inv.status, inv.store]);
+    if (storeReady && (inv.status === "idle" || (inv.store !== store && inv.status !== "loading"))) void loadInventory(store);
+  }, [storeReady, store, inv.status, inv.store]);
 
   const s = q.trim().toLowerCase();
   const filtering = !!s || lowOnly; // an active pre-filter auto-reveals its matches
@@ -152,6 +163,7 @@ export function Inventory() {
 
   return (
     <section className="screen screen-full">
+      {move && <StockMoveDialog mode={move.mode} storeId={move.storeId} variants={inv.data?.variants ?? []} onClose={() => setMove(null)} />}
       {adjusting && <AdjustDialog variant={adjusting.v} productTitle={adjusting.p.title} storeId={adjusting.storeId} onClose={() => setAdjusting(null)} />}
       <div className="tabs">
         <button className={`tab${tab === "shopify" ? " active" : ""}`} onClick={() => setTab("shopify")}>Shopify</button>
@@ -176,6 +188,8 @@ export function Inventory() {
             <div className="spacer" />
             <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{plural(rows.length, "product")} · {plural(shown, "variant")}</span>
             <ColumnsMenu table={table} />
+            <button className="btn btn-control" disabled={inv.status !== "data"} onClick={() => openMove("receive")}>Receive</button>
+            <button className="btn btn-control" disabled={inv.status !== "data"} onClick={() => openMove("transfer")}>Transfer</button>
             <button className="btn btn-control" onClick={sync}>Sync now</button>
           </div>
           {inv.data?.levelsError && (
@@ -198,11 +212,11 @@ export function Inventory() {
             <button className="btn btn-warn" style={{ alignSelf: "center" }} onClick={() => toast("Reconcile ships in a later release")}>Reconcile</button>
           </div>
           <div className="action-grid">
-            <button className="action-card" onClick={openSheet}>
-              <span className="name">Receive</span><span className="desc">Log an incoming lot from a grower or processor with weight, moisture and COA link.</span><span className="cta">New receipt →</span>
+            <button className="action-card" onClick={() => openMove("receive")}>
+              <span className="name">Receive</span><span className="desc">Add incoming units to Shopify stock at a location, with a lot or PO reference.</span><span className="cta">New receipt →</span>
             </button>
-            <button className="action-card" onClick={() => toast("Transfers ship in a later release")}>
-              <span className="name">Transfer</span><span className="desc">Move quantity between Warehouse, Retail floor and Quarantine.</span><span className="cta">New transfer →</span>
+            <button className="action-card" onClick={() => openMove("transfer")}>
+              <span className="name">Transfer</span><span className="desc">Move units between Shopify locations — both sides apply together.</span><span className="cta">New transfer →</span>
             </button>
             <button className="action-card" onClick={() => { setTab("shopify"); toast("Adjust Shopify stock with ± on a variant row"); }}>
               <span className="name">Adjust</span><span className="desc">Cycle count corrections, shrink, samples and destroyed product — with a reason code.</span><span className="cta">New adjustment →</span>
