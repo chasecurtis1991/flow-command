@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useApp } from "../lib/app";
 import {
-  type CatalogProduct, type StoreId, isScopeError, loadCatalog, money, moneyNum, productProfile, productStatus, storeById, swatchColor, useCatalog,
+  STORES, type CatalogProduct, type PresenceState, type StoreId, adminUrl, isScopeError, loadCatalog, loadPresence, money, moneyNum, presenceIn, productProfile,
+  productStatus, storeById, swatchColor, useCatalog, usePresence,
 } from "../lib/shopify";
 import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterButton, FilterChips, TableHead, TableRow } from "../components/DataTable";
+import { VariantSplitDialog } from "./VariantSplitDialog";
 
 const storeChipLabel: Record<StoreId, string> = { retail: "R", b2b: "B2B", bulk: "Bulk" };
 const STATUS_OPTIONS = ["ACTIVE", "DRAFT", "ARCHIVED"].map((v) => ({ value: v, label: productStatus(v).label }));
@@ -15,13 +18,26 @@ const STATUS_OPTIONS = ["ACTIVE", "DRAFT", "ARCHIVED"].map((v) => ({ value: v, l
 const art = (p: CatalogProduct): CSSProperties =>
   p.imageUrl ? { backgroundImage: `url("${p.imageUrl}")`, backgroundSize: "cover", backgroundPosition: "center" } : { backgroundColor: swatchColor(p.title) };
 const priceRange = (p: CatalogProduct) => (p.minPrice !== p.maxPrice ? `${money(p.minPrice)} – ${money(p.maxPrice)}` : undefined);
+const openBtn = (store: StoreId, gid: string) => (
+  <button className="icon-btn" title="Open in Shopify" aria-label="Open in Shopify" onClick={(e) => { e.stopPropagation(); void openUrl(adminUrl(store, gid)); }}>{"↗"}</button>
+);
 
-function catalogColumns(store: StoreId, typeOptions: { value: string; label: string }[]): ColumnDef<CatalogProduct>[] {
-  // Only the active store's catalog is loaded, so a chip is shown for it alone — never inferred for the other stores.
-  const visibleIn = (p: CatalogProduct) =>
-    p.status === "ACTIVE"
-      ? <span className={`store-chip ${store}`} title={`Active in ${storeById(store).label}`}>{storeChipLabel[store]}</span>
-      : <span className="mute">—</span>;
+function catalogColumns(store: StoreId, typeOptions: { value: string; label: string }[], presence: PresenceState, split: (p: CatalogProduct) => void): ColumnDef<CatalogProduct>[] {
+  // The active store answers from the product itself; the others from their presence lists (handle / title match).
+  const statusIn = (p: CatalogProduct, id: StoreId) => (id === store ? p.status : presenceIn(p, presence[id].data?.products));
+  const pending = (id: StoreId) => id !== store && (presence[id].status === "idle" || presence[id].status === "loading");
+  const activeIn = (p: CatalogProduct) => STORES.filter((s) => statusIn(p, s.id) === "ACTIVE");
+  const visibleIn = (p: CatalogProduct) => {
+    const chips = activeIn(p).map((s) => <span key={s.id} className={`store-chip ${s.id}`}>{storeChipLabel[s.id]}</span>);
+    const wait = STORES.some((s) => pending(s.id));
+    const title = STORES.map((s) => {
+      if (pending(s.id)) return `Loading ${s.short}`;
+      if (s.id !== store && presence[s.id].status === "error") return `${s.short} unavailable`;
+      const st = statusIn(p, s.id);
+      return `${st ? productStatus(st).label : "Not listed"} in ${s.short}`;
+    }).join(" · ");
+    return <span title={title} style={{ display: "flex", gap: 4, minWidth: 0 }}>{chips}{wait ? <span className="mute">…</span> : !chips.length && <span className="mute">—</span>}</span>;
+  };
   return [
     { id: "art", label: "", title: "Image", width: "36px", cellClass: "swatch", cellStyle: art, cell: () => null },
     {
@@ -38,11 +54,16 @@ function catalogColumns(store: StoreId, typeOptions: { value: string; label: str
       filter: { kind: "enum", value: (p) => p.status, options: STATUS_OPTIONS },
       cell: (p) => { const st = productStatus(p.status); return <Pill kind={st.kind} dot={false}>{st.label}</Pill>; },
     },
-    { id: "visible", label: "Visible in", title: "Only the active store’s catalog is loaded", width: "160px", cellStyle: () => ({ display: "flex", gap: 4 }), cell: visibleIn },
+    {
+      id: "visible", label: "Visible in", title: "Stores where the product is active", width: "160px", cell: visibleIn,
+      filter: { kind: "text", value: (p) => activeIn(p).map((s) => s.short).join(" "), placeholder: "e.g. B2B" },
+    },
     { id: "variants", label: "Variants", width: "80px", align: "right", cellClass: "soft", sortValue: (p) => p.variantCount, sortDir: "desc", cell: (p) => p.variantCount },
     { id: "price", label: "From", width: "110px", align: "right", sortValue: (p) => moneyNum(p.minPrice), sortDir: "desc", cell: (p) => <span title={priceRange(p)}>{money(p.minPrice)}</span> },
     { id: "inventory", label: "Inventory", width: "90px", align: "right", defaultHidden: true, sortValue: (p) => (p.tracksInventory ? p.totalInventory : null), sortDir: "desc", cell: (p) => (p.tracksInventory ? p.totalInventory : "—") },
     { id: "vendor", label: "Vendor", width: "120px", defaultHidden: true, cellClass: "sub ellip", sortValue: (p) => p.vendor, filter: { kind: "text", value: (p) => p.vendor ?? "" }, cell: (p) => p.vendor ?? "—" },
+    { id: "split", label: "", title: "Split variants", width: "112px", hideable: false, cell: (p) => p.variantCount > 1 && <button className="btn btn-control" onClick={() => split(p)}>Split variants</button> },
+    { id: "open", label: "", title: "Open in Shopify", width: "32px", hideable: false, cell: (p) => openBtn(store, p.id) },
   ];
 }
 
@@ -50,13 +71,19 @@ export function Catalog() {
   const navigate = useNavigate();
   const { store, storeReady, toast } = useApp();
   const cat = useCatalog();
+  const presence = usePresence();
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(() => params.get("q") ?? "");
-  const [view, setView] = useState<"table" | "grid">("table");
+  const [splitTarget, setSplitTarget] = useState<{ product: CatalogProduct; storeId: StoreId } | null>(null);
+  const [view, setView] = useState<"table" | "grid">(() => (params.get("view") === "grid" ? "grid" : "table")); // ?view=grid deep link
 
   useEffect(() => {
     if (storeReady && (cat.status === "idle" || (cat.store !== store && cat.status !== "loading"))) void loadCatalog(store);
   }, [storeReady, store, cat.status, cat.store]);
+  // The other stores' presence lists feed "Visible in"; errored entries stay put until ⌘R (Retry is explicit).
+  useEffect(() => {
+    if (storeReady) STORES.forEach((s) => { if (s.id !== store && presence[s.id].status === "idle") void loadPresence(s.id); });
+  }, [storeReady, store, presence]);
 
   const products = cat.data?.products ?? [];
   const typeOptions = useMemo(() => {
@@ -68,7 +95,8 @@ export function Catalog() {
   const searched = useMemo(() => (!s ? products : products.filter((p) =>
     `${p.title} ${p.productType ?? ""} ${p.vendor ?? ""} ${p.tags.join(" ")} ${productProfile(p)}`.toLowerCase().includes(s))), [products, s]);
 
-  const columns = useMemo(() => catalogColumns(store, typeOptions), [store, typeOptions]);
+  const split = (product: CatalogProduct) => { if (cat.store === store && storeReady) setSplitTarget({ product, storeId: store }); };
+  const columns = useMemo(() => catalogColumns(store, typeOptions, presence, split), [store, typeOptions, presence, cat.store, storeReady]);
   const table = useTable<CatalogProduct>({ id: "catalog", columns, rows: searched });
   const rows = table.rowsOut;
 
@@ -130,8 +158,12 @@ export function Catalog() {
               <div className="mute ellip" style={{ fontSize: 11.5 }}>{p.productType ?? "—"} · {productProfile(p)}</div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
                 <Pill kind={st.kind} sm dot={false}>{st.label}</Pill>
-                <span className="num" style={{ fontSize: 12.5 }} title={priceRange(p)}>{money(p.minPrice)}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <span className="num" style={{ fontSize: 12.5 }} title={priceRange(p)}>{money(p.minPrice)}</span>
+                  {openBtn(store, p.id)}
+                </span>
               </div>
+              {p.variantCount > 1 && <button className="btn btn-control" style={{ marginTop: 8 }} onClick={() => split(p)}>Split variants</button>}
             </div>
           </div>
         );
@@ -144,12 +176,10 @@ export function Catalog() {
       <div className="toolbar" style={{ flexWrap: "wrap" }}>
         <input className="input" style={{ width: 240 }} placeholder="Search products, types or tags" value={q} onChange={(e) => setQ(e.target.value)} />
         <FilterButton table={table} column="status" />
-        <button className="btn btn-control" title="Only the active store’s catalog is loaded" onClick={() => toast("Cross-store catalog ships in a later release")}>
-          Visible in <span className="muted">{storeById(store).short}</span>
-        </button>
         <FilterButton table={table} column="type" />
         <FilterChips table={table} exclude={["status", "type"]} />
-        {cat.status === "data" && <Pill kind="green" sm>Live</Pill>}
+        {cat.status === "data" && (import.meta.env.DEV && "__FLOW_COMMAND_BROWSER_PREVIEW__" in window
+          ? <Pill kind="neutral" sm>Sample data</Pill> : <Pill kind="green" sm>Live</Pill>)}
         <div className="spacer" />
         <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{rows.length} products</span>
         <button className="btn btn-control" onClick={sync}>Sync now</button>
@@ -164,6 +194,7 @@ export function Catalog() {
 
       {view === "table" && <TableHead table={table} />}
       {body}
+      {splitTarget && <VariantSplitDialog product={splitTarget.product} storeId={splitTarget.storeId} onClose={() => setSplitTarget(null)} />}
     </section>
   );
 }
