@@ -1,8 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useApp } from "../lib/app";
 import { coaColor, driftColor, lotsSummary, shopInv, useLots } from "../lib/mock";
-import { type InventoryVariant, type Kind, loadInventory, lowStock, storeById, useInventory } from "../lib/shopify";
+import {
+  type InventoryProduct, type InventoryVariant, type Kind, type StoreId, adminUrl, groupInventory, loadInventory, lowStock, productStatus, storeById, useInventory,
+} from "../lib/shopify";
 import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill, SampleData } from "../components/ui";
 import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/DataTable";
@@ -11,42 +14,61 @@ import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/Dat
 const drifted = shopInv.filter((v) => v.sync.startsWith("Drift"));
 const driftUnits = drifted.reduce((a, v) => a + Math.abs(parseInt(v.sync.replace(/[^\d+\-−]/g, "").replace("−", "-"), 10) || 0), 0);
 
-const titleCase = (s: string) => s.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
-const statusPill = (v: InventoryVariant): { label: string; kind: Kind } => {
-  if (!v.tracked) return { label: "Untracked", kind: "neutral" };
-  if (v.productStatus === "ACTIVE") return { label: "Active", kind: "green" };
-  if (v.productStatus === "DRAFT") return { label: "Draft", kind: "amber" };
-  if (v.productStatus === "ARCHIVED") return { label: "Archived", kind: "neutral" };
-  return { label: titleCase(v.productStatus), kind: "neutral" };
-};
+const statusPill = (p: InventoryProduct): { label: string; kind: Kind } => (p.tracked ? productStatus(p.status) : { label: "Untracked", kind: "neutral" });
 /** Summed across locations; null when the products-only fallback ran (no per-location levels). */
 const sum = (v: InventoryVariant, k: "onHand" | "committed") => (v.levels.length ? v.levels.reduce((a, l) => a + l[k], 0) : null);
-const variantName = (v: InventoryVariant) => `${v.productTitle}${v.variantTitle != null ? ` · ${v.variantTitle}` : ""}`;
+const leafSku = (p: InventoryProduct) => (p.leaf ? p.variants[0].sku : null);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-const INVENTORY_COLUMNS: ColumnDef<InventoryVariant>[] = [
-  {
-    id: "variant", label: "Variant", width: "minmax(0, 1.4fr)", cellClass: "ellip", sortValue: variantName,
-    filter: { kind: "text", value: (v) => variantName(v), placeholder: "Product or variant" },
-    cell: (v) => <>
-      {v.productTitle}
-      {v.variantTitle != null && <span className="mute"> · {v.variantTitle}</span>}
-      {v.productStatus !== "ACTIVE" && <> <span className="tag-caps">{v.productStatus}</span></>}
-    </>,
-  },
-  { id: "sku", label: "SKU", width: "150px", cellClass: "sub mono", cellStyle: () => ({ fontSize: 12 }), sortValue: (v) => v.sku, filter: { kind: "text", value: (v) => v.sku ?? "", placeholder: "SKU" }, cell: (v) => v.sku ?? "—" },
-  { id: "onHand", label: "On hand", width: "110px", align: "right", sortValue: (v) => sum(v, "onHand"), sortDir: "desc", cell: (v) => sum(v, "onHand") ?? "—" },
-  { id: "committed", label: "Committed", width: "110px", align: "right", sortValue: (v) => sum(v, "committed"), sortDir: "desc", cell: (v) => sum(v, "committed") ?? "—" },
-  {
-    id: "available", label: "Available", width: "110px", align: "right", sortValue: (v) => v.available, sortDir: "desc",
-    cellStyle: (v) => ({ fontWeight: 500, color: lowStock(v) ? "var(--amber)" : "var(--text)" }), cell: (v) => v.available,
-  },
-  { id: "fginv", label: "FGINV", title: "FGINV counts arrive when the FGINV backend is wired", width: "90px", align: "right", cellClass: "sub", cell: () => "—" },
-  {
-    id: "status", label: "Status", width: "130px", sortValue: (v) => statusPill(v).label,
-    filter: { kind: "enum", value: (v) => statusPill(v).label },
-    cell: (v) => { const st = statusPill(v); return <Pill kind={st.kind}>{st.label}</Pill>; },
-  },
-];
+// The tree: useTable only ever sees product rows (sort / filter / count are per product); variant rows are rendered
+// under their open product afterwards, so sortValue / filter guard on kind and only read `p`.
+type InvRow = { kind: "product"; p: InventoryProduct } | { kind: "variant"; p: InventoryProduct; v: InventoryVariant };
+
+function inventoryColumns(store: StoreId, isOpen: (p: InventoryProduct) => boolean, toggle: (id: string) => void): ColumnDef<InvRow>[] {
+  return [
+    {
+      id: "product", label: "Product", width: "minmax(0, 1.6fr)", cellClass: (r) => (r.kind === "product" ? "ellip" : "ellip child-cell"),
+      sortValue: (r) => (r.kind === "product" ? r.p.title : null),
+      filter: { kind: "text", value: (r) => (r.kind === "product" ? `${r.p.title} ${r.p.variants.map((v) => `${v.variantTitle ?? ""} ${v.sku ?? ""}`).join(" ")}` : ""), placeholder: "Product, variant or SKU" },
+      cell: (r) => (r.kind === "product" ? <>
+        {r.p.leaf ? <span style={{ display: "inline-block", width: 22 }} /> : (
+          <button className="icon-btn chevron" aria-expanded={isOpen(r.p)} aria-label="Show variants" onClick={(e) => { e.stopPropagation(); toggle(r.p.id); }}>›</button>
+        )}
+        {r.p.title}
+        {r.p.leaf ? r.p.variants[0].variantTitle != null && <span className="mute"> · {r.p.variants[0].variantTitle}</span>
+          : <span className="mute"> · {r.p.variants.length} variants</span>}
+        {r.p.status !== "ACTIVE" && <> <span className="tag-caps">{r.p.status}</span></>}
+      </> : <>
+        {r.v.variantTitle ?? "Default"}
+        {!r.v.tracked && <> <span className="tag-caps">UNTRACKED</span></>}
+      </>),
+    },
+    {
+      id: "sku", label: "SKU", width: "150px", cellClass: "sub mono", cellStyle: () => ({ fontSize: 12 }), sortValue: (r) => (r.kind === "product" ? leafSku(r.p) : null),
+      filter: { kind: "text", value: (r) => (r.kind === "product" ? r.p.variants.map((v) => v.sku ?? "").join(" ") : ""), placeholder: "SKU" },
+      cell: (r) => (r.kind === "product" ? leafSku(r.p) : r.v.sku) ?? "—",
+    },
+    { id: "onHand", label: "On hand", width: "110px", align: "right", sortValue: (r) => (r.kind === "product" ? r.p.onHand : null), sortDir: "desc", cell: (r) => (r.kind === "product" ? r.p.onHand : sum(r.v, "onHand")) ?? "—" },
+    { id: "committed", label: "Committed", width: "110px", align: "right", sortValue: (r) => (r.kind === "product" ? r.p.committed : null), sortDir: "desc", cell: (r) => (r.kind === "product" ? r.p.committed : sum(r.v, "committed")) ?? "—" },
+    {
+      id: "available", label: "Available", width: "110px", align: "right", sortValue: (r) => (r.kind === "product" ? r.p.available : null), sortDir: "desc",
+      cellStyle: (r) => ({ fontWeight: r.kind === "product" ? 500 : undefined, color: (r.kind === "product" ? r.p.low : lowStock(r.v)) ? "var(--amber)" : "var(--text)" }),
+      cell: (r) => (r.kind === "product" ? r.p.available : r.v.available),
+    },
+    { id: "fginv", label: "FGINV", title: "FGINV counts arrive when the FGINV backend is wired", width: "90px", align: "right", cellClass: "sub", cell: () => "—" },
+    {
+      id: "status", label: "Status", width: "130px", sortValue: (r) => (r.kind === "product" ? statusPill(r.p).label : null),
+      filter: { kind: "enum", value: (r) => (r.kind === "product" ? statusPill(r.p).label : null) },
+      cell: (r) => { if (r.kind !== "product") return null; const st = statusPill(r.p); return <Pill kind={st.kind}>{st.label}</Pill>; }, // status is product-level; UNTRACKED tags mark variants
+    },
+    {
+      id: "open", label: "", title: "Open in Shopify", width: "32px", hideable: false,
+      cell: (r) => r.kind === "product" && (
+        <button className="icon-btn" title="Open in Shopify" aria-label="Open in Shopify" onClick={(e) => { e.stopPropagation(); void openUrl(adminUrl(store, r.p.id)); }}>{"↗"}</button>
+      ),
+    },
+  ];
+}
 
 export function Inventory() {
   const navigate = useNavigate();
@@ -57,6 +79,7 @@ export function Inventory() {
   const setTab = (t: "shopify" | "fginv") => setParams(t === "fginv" ? { tab: "fginv" } : {}, { replace: true });
   const [q, setQ] = useState("");
   const [lowOnly, setLowOnly] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const lots = useLots();
 
   useEffect(() => {
@@ -64,13 +87,24 @@ export function Inventory() {
   }, [storeReady, tab, store, inv.status, inv.store]);
 
   const s = q.trim().toLowerCase();
+  const filtering = !!s || lowOnly; // an active pre-filter auto-reveals its matches
   const variants = inv.data?.variants ?? [];
   const locations = inv.data?.locations ?? [];
-  // Search + Low stock are the toolbar-wide pre-filters; column filters and sort apply on top.
-  const searched = useMemo(() => variants.filter((v) =>
-    (!lowOnly || lowStock(v)) && (!s || `${v.productTitle} ${v.variantTitle ?? ""} ${v.sku ?? ""}`.toLowerCase().includes(s))), [variants, lowOnly, s]);
-  const table = useTable<InventoryVariant>({ id: "inventory", columns: INVENTORY_COLUMNS, rows: searched });
+  const products = useMemo(() => groupInventory(variants), [variants]);
+  // Search + Low stock are the toolbar-wide pre-filters; column filters and sort apply on top (per product).
+  const hit = (v: InventoryVariant) => `${v.variantTitle ?? ""} ${v.sku ?? ""}`.toLowerCase().includes(s);
+  const productRows = useMemo<InvRow[]>(() => products
+    .filter((p) => (!lowOnly || p.low) && (!s || p.title.toLowerCase().includes(s) || p.variants.some(hit)))
+    .map((p) => ({ kind: "product", p })), [products, lowOnly, s]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Children under an open product: only low ones under Low stock; only matching ones when the search hit a variant but not the title.
+  const kids = (p: InventoryProduct) => p.variants.filter((v) => (!lowOnly || lowStock(v)) && (!s || p.title.toLowerCase().includes(s) || hit(v)));
+  const isOpen = useCallback((p: InventoryProduct) => filtering || expanded.has(p.id), [filtering, expanded]);
+  const toggle = useCallback((id: string) => setExpanded((e) => { const n = new Set(e); if (!n.delete(id)) n.add(id); return n; }), []);
+  const anyClosed = !products.length || products.some((p) => !p.leaf && !expanded.has(p.id));
+  const columns = useMemo(() => inventoryColumns(store, isOpen, toggle), [store, isOpen, toggle]);
+  const table = useTable<InvRow>({ id: "inventory", columns, rows: productRows });
   const rows = table.rowsOut;
+  const shown = rows.reduce((a, r) => a + (r.p.leaf ? 1 : isOpen(r.p) ? kids(r.p).length : 0), 0); // leaves + visible children
 
   const sync = () => {
     const t0 = performance.now();
@@ -90,12 +124,17 @@ export function Inventory() {
     </>} />
   );
   else if (rows.length === 0) body = (
-    <EmptyState title="No variants match" why="Try another SKU, or clear Low stock only and the column filters."
+    <EmptyState title="No products match" why="Try another product, variant or SKU, or clear Low stock only and the column filters."
       action={<button className="btn btn-secondary" onClick={() => { setQ(""); setLowOnly(false); table.clearFilters(); }}>Clear filters</button>} />
   );
   else body = (
     <div className="scroll">
-      {rows.map((v) => <TableRow key={v.id} table={table} row={v} />)}
+      {rows.map(({ p }) => (
+        <Fragment key={p.id}>
+          <TableRow table={table} row={{ kind: "product", p }} className={p.leaf ? undefined : "parent"} onClick={p.leaf ? undefined : () => toggle(p.id)} />
+          {!p.leaf && isOpen(p) && kids(p).map((v) => <TableRow key={v.id} table={table} row={{ kind: "variant", p, v }} className="child" />)}
+        </Fragment>
+      ))}
     </div>
   );
 
@@ -116,12 +155,13 @@ export function Inventory() {
       {tab === "shopify" ? (
         <>
           <div className="toolbar" style={{ flexWrap: "wrap" }}>
-            <input className="input" style={{ width: 280 }} placeholder="Search variants or SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
+            <input className="input" style={{ width: 280 }} placeholder="Search products, variants or SKUs" value={q} onChange={(e) => setQ(e.target.value)} />
             <button className="btn btn-control">Location <span className="muted">{locations.join(", ") || "All"}</span></button>
             <button className={`btn btn-control${lowOnly ? " on" : ""}`} onClick={() => setLowOnly((v) => !v)}>Low stock only</button>
+            <button className="btn btn-control" onClick={() => setExpanded(anyClosed ? new Set(products.filter((p) => !p.leaf).map((p) => p.id)) : new Set())}>{anyClosed ? "Expand all" : "Collapse all"}</button>
             <FilterChips table={table} />
             <div className="spacer" />
-            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{rows.length} variants</span>
+            <span className="mute num" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{plural(rows.length, "product")} · {plural(shown, "variant")}</span>
             <ColumnsMenu table={table} />
             <button className="btn btn-control" onClick={sync}>Sync now</button>
           </div>
