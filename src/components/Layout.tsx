@@ -6,18 +6,22 @@ import {
   invalidateCatalog, invalidateOrdersTable, invalidateCustomers, invalidatePresence, invalidateAnalytics, invalidateCoas, loadCatalog, useCatalog, useCoas,
 } from "../lib/shopify";
 import { customers, addLot } from "../lib/mock";
+import { Icon, type IconName } from "./icons";
 
-const NAV = [
-  { path: "/home", label: "Home" },
-  { path: "/orders", label: "Orders" },
-  { path: "/inventory", label: "Inventory" },
-  { path: "/catalog", label: "Catalog" },
-  { path: "/lab", label: "Lab / COAs" },
-  { path: "/customers", label: "Customers" },
-  { path: "/analytics", label: "Analytics" },
-  { path: "/settings", label: "Settings" },
+const NAV: { path: string; label: string; icon: IconName }[] = [
+  { path: "/home", label: "Home", icon: "home" },
+  { path: "/orders", label: "Orders", icon: "orders" },
+  { path: "/inventory", label: "Inventory", icon: "inventory" },
+  { path: "/catalog", label: "Catalog", icon: "catalog" },
+  { path: "/lab", label: "Lab / COAs", icon: "lab" },
+  { path: "/customers", label: "Customers", icon: "customers" },
+  { path: "/analytics", label: "Analytics", icon: "analytics" },
+  { path: "/settings", label: "Settings", icon: "settings" },
 ];
 const TITLES: Record<string, string> = { ...Object.fromEntries(NAV.map((n) => [n.path, n.label])), "/system": "Design system" };
+
+/** The clicked toggle unmounts on toggle; hand focus to its counterpart so keyboard users stay in the sidebar. */
+const focusToggle = (sel: string) => requestAnimationFrame(() => document.querySelector<HTMLElement>(sel)?.focus());
 
 export function Layout() {
   const navigate = useNavigate();
@@ -27,6 +31,8 @@ export function Layout() {
 
   const [store, setStoreState] = useState<StoreId>("retail");
   const [storeReady, setStoreReady] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => prefs.get("sidebar", "open", ["open", "collapsed"] as const) === "collapsed");
+  useEffect(() => { prefs.set("sidebar", collapsed ? "collapsed" : "open"); }, [collapsed]);
   const [accent, setAccent] = useState<Accent>(() => prefs.get("accent", "blue", ["blue", "green"] as const));
   const [density, setDensity] = useState<Density>(() => prefs.get("density", "comfortable", ["compact", "comfortable"] as const));
   const [palette, setPalette] = useState(false);
@@ -85,6 +91,7 @@ export function Layout() {
       if (mod && k === "k") { e.preventDefault(); setPalette((p) => !p); return; }
       if (e.key === "Escape") { setPalette(false); setSheet(false); return; }
       if (!mod) return;
+      if (e.key === "\\") { e.preventDefault(); setCollapsed((c) => !c); return; }
       if (e.key === "1" || e.key === "2" || e.key === "3") { e.preventDefault(); void setStore(STORES[Number(e.key) - 1].id); }
       else if (k === "r" && e.shiftKey) { e.preventDefault(); setSheet(true); }
       else if (k === "r") { e.preventDefault(); refresh(); }
@@ -107,28 +114,45 @@ export function Layout() {
 
   return (
     <AppContext.Provider value={ctx}>
-      <div className="app">
+      <div className={`app${collapsed ? " collapsed" : ""}`}>
         <aside className="sidebar">
           <div className="sidebar-drag" data-tauri-drag-region="" />
           <div className="brand">
-            <div className="brand-mark">FC</div>
-            <div>
+            {/* Collapsed: hovering (or tabbing to) the FC mark cross-fades it into the expand toggle. */}
+            <div className="brand-mark-wrap">
+              <div className="brand-mark">FC</div>
+              {collapsed && (
+                <button className="brand-expand" aria-label="Expand sidebar" aria-expanded={false} title={"Expand sidebar (⌘\\)"} onClick={() => { setCollapsed(false); focusToggle(".sidebar-toggle"); }}>
+                  <Icon name="sidebar" />
+                </button>
+              )}
+            </div>
+            <div className="brand-text">
               <div className="brand-title">Flow Command</div>
               <div className="brand-sub">Flow Gardens</div>
             </div>
+            {!collapsed && (
+              <button className="icon-btn sidebar-toggle" aria-label="Collapse sidebar" aria-expanded title={"Collapse sidebar (⌘\\)"} onClick={() => { setCollapsed(true); focusToggle(".brand-expand"); }}>
+                <Icon name="sidebar" />
+              </button>
+            )}
           </div>
           <nav className="nav">
             {NAV.map((n) => (
-              <NavLink key={n.path} to={n.path} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
-                <span>{n.label}</span>
+              <NavLink key={n.path} to={n.path} title={collapsed ? (badges[n.path] > 0 ? `${n.label} · ${badges[n.path]}` : n.label) : undefined}
+                aria-label={collapsed ? n.label : undefined} className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+                <Icon name={n.icon} />
+                <span className="nav-label">{n.label}</span>
                 {badges[n.path] > 0 && <span className="nav-badge">{badges[n.path]}</span>}
               </NavLink>
             ))}
           </nav>
           <div className="spacer" />
           <div className="sidebar-section">Design</div>
-          <NavLink to="/system" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
-            <span>Design system &amp; handoff</span>
+          <NavLink to="/system" title={collapsed ? "Design system & handoff" : undefined} aria-label={collapsed ? "Design system & handoff" : undefined}
+            className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
+            <Icon name="design" />
+            <span className="nav-label">Design system &amp; handoff</span>
           </NavLink>
           <ConnectionCard orders={orders} store={store} />
         </aside>
@@ -206,16 +230,16 @@ function ConnectionCard({ orders, store }: { orders: OrdersState; store: StoreId
   const label = storeById(store).short;
   if (orders.status === "error") {
     return (
-      <div className="conn"><span className="conn-dot warn" /><div><div>Shopify unreachable</div><div className="mute">Check credentials in Settings</div></div></div>
+      <div className="conn" title="Shopify unreachable"><span className="conn-dot warn" /><div><div>Shopify unreachable</div><div className="mute">Check credentials in Settings</div></div></div>
     );
   }
   if (orders.status === "data") {
     return (
-      <div className="conn"><span className="conn-dot" /><div><div>Connected · {label}</div><div className="mute">Synced {ago(orders.loadedAt)}</div></div></div>
+      <div className="conn" title={`Connected · ${label}`}><span className="conn-dot" /><div><div>Connected · {label}</div><div className="mute">Synced {ago(orders.loadedAt)}</div></div></div>
     );
   }
   return (
-    <div className="conn"><span className="conn-dot off" /><div><div>Connecting…</div><div className="mute">{STORES.length} stores</div></div></div>
+    <div className="conn" title="Connecting…"><span className="conn-dot off" /><div><div>Connecting…</div><div className="mute">{STORES.length} stores</div></div></div>
   );
 }
 

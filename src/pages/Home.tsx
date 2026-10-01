@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../lib/app";
-import { STORES, type Order, type StoreId, fetchShopInfo, isOpenFulfillment, loadOrders, money, moneyNum, storeById, useOrders } from "../lib/shopify";
-import { activity, shopInv } from "../lib/mock";
+import { STORES, type Order, type StoreId, fetchShopInfo, isOpenFulfillment, loadInventory, loadOrders, lowStock, money, moneyNum, storeById, useInventory, useOrders } from "../lib/shopify";
+import { activity } from "../lib/mock";
 import { SampleData, Status } from "../components/ui";
 
 type Tone = "green" | "amber" | "red" | "mute";
@@ -11,7 +11,7 @@ const COLOR: Record<Tone, string> = { green: "var(--green)", amber: "var(--amber
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const CHECKING: Health = { kind: "mute", text: "Checking…" };
-const SHORTCUTS: [string, string][] = [["Low stock", "/inventory"], ["Unposted COAs", "/lab?posted=unposted"], ["Draft products", "/catalog?status=draft"], ["Store settings", "/settings"]];
+const SHORTCUTS: [string, string][] = [["Low stock", "/inventory?low=1"], ["Unposted COAs", "/lab?posted=unposted"], ["Draft products", "/catalog?status=draft"], ["Store settings", "/settings"]];
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 const age = (o: Order) => Date.now() - new Date(o.createdAt).getTime();
@@ -23,6 +23,11 @@ export function Home() {
   const [health, setHealth] = useState<Record<StoreId, Health>>({ retail: CHECKING, b2b: CHECKING, bulk: CHECKING });
 
   useEffect(() => { if (storeReady && cache.status === "idle") void loadOrders(store); }, [storeReady, store, cache.status]);
+  // Same cache the Inventory page uses, so visiting either loads it once per store.
+  const inv = useInventory();
+  useEffect(() => {
+    if (storeReady && (inv.status === "idle" || (inv.store !== store && inv.status !== "loading"))) void loadInventory(store);
+  }, [storeReady, store, inv.status, inv.store]);
 
   // Connection health: ping every store's Admin API once, timing each call.
   useEffect(() => {
@@ -45,9 +50,11 @@ export function Home() {
   const open = cache.orders.filter(isOpenFulfillment);
   const overdue = open.filter((o) => age(o) > 2 * DAY);
   const oldest = open.reduce<Order | null>((a, o) => (!a || age(o) > age(a) ? o : a), null);
-  const low = shopInv.filter((v) => v.lowStock);
+  // Same rule as Inventory's "Low stock only" (tracked, ≤ 10 available), lowest first.
+  const invReady = inv.status === "data" && inv.store === store;
+  const low = invReady ? inv.data!.variants.filter(lowStock).sort((a, b) => a.available - b.available) : [];
 
-  const kpis: { label: string; value: string | number; delta: string; tone: Tone; sub: string }[] = [
+  const kpis: { label: string; value: string | number; delta: string; tone: Tone; sub: string; href?: string }[] = [
     {
       label: "Orders · 24h", value: data ? last24.length : "—",
       delta: !data || pct == null ? "—" : `${pct >= 0 ? "+" : "−"}${Math.abs(pct)}%`, tone: !data || pct == null ? "mute" : pct >= 0 ? "green" : "red",
@@ -58,7 +65,11 @@ export function Home() {
       delta: data ? `${overdue.length} overdue` : "—", tone: overdue.length ? "amber" : "mute",
       sub: oldest ? `Oldest: ${oldest.name} · ${Math.floor(age(oldest) / DAY)} days` : data ? "Nothing waiting" : "Loading…",
     },
-    { label: "Low stock", value: low.length, delta: "FGINV", tone: "mute", sub: low[0] ? `${low[0].title} ${low[0].size} at ${low[0].avail}` : "All variants stocked" },
+    {
+      label: "Low stock", value: invReady ? low.length : "—", delta: invReady ? "≤ 10 avail" : "—", tone: low.length ? "amber" : "mute", href: "/inventory?low=1",
+      sub: inv.status === "error" && inv.store === store ? "Inventory unavailable" : !invReady ? "Loading…"
+        : low[0] ? `${low[0].productTitle}${low[0].variantTitle ? ` ${low[0].variantTitle}` : ""} at ${low[0].available}` : "All variants stocked",
+    },
     { label: "Alerts", value: 3, delta: "1 new", tone: "red", sub: "COA unposted · drift · wire pending" },
   ];
 
@@ -84,7 +95,8 @@ export function Home() {
 
       <div className="kpi-grid">
         {kpis.map((k, i) => (
-          <div key={k.label} className="card kpi" style={{ animationDelay: `${i * 60}ms` }}>
+          <div key={k.label} className={`card kpi${k.href ? " kpi-link" : ""}`} style={{ animationDelay: `${i * 60}ms` }}
+            {...(k.href ? { role: "link", tabIndex: 0, onClick: () => navigate(k.href!), onKeyDown: (e: React.KeyboardEvent) => e.key === "Enter" && navigate(k.href!) } : {})}>
             <div className="kpi-top"><span>{k.label}</span><span className="num" style={{ color: COLOR[k.tone] }}>{k.delta}</span></div>
             <div className="kpi-value">{k.value}</div>
             <div className="kpi-sub">{k.sub}</div>

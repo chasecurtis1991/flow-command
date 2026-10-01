@@ -11,6 +11,7 @@ import {
 import { type ColumnDef, sameSet, useDebounced, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterChips, PageSizePicker, TableHead, TableRow } from "../components/DataTable";
+import { OrderNotes } from "./OrderNotes";
 
 const lineTotal = (li: LineItem) => money(`${(moneyNum(li.price) * li.quantity).toFixed(2)} ${li.price.split(/\s+/)[1] ?? "USD"}`);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -90,6 +91,7 @@ export function Orders() {
   useEffect(() => { if (storeReady) ensureOrdersPage(store, request); }, [storeReady, store, request, tbl.status]);
 
   const [detail, setDetail] = useState<{ id: string; data?: OrderDetail; error?: string }>({ id: "" });
+  const [reload, setReload] = useState(0);
   useEffect(() => {
     if (!selectedId) { setDetail({ id: "" }); return; }
     let alive = true;
@@ -98,7 +100,7 @@ export function Orders() {
       .then((d) => alive && setDetail({ id: selectedId, data: d }))
       .catch((e) => alive && setDetail({ id: selectedId, error: String(e) }));
     return () => { alive = false; };
-  }, [selectedId]);
+  }, [selectedId, reload]);
 
   const loading = tbl.status === "loading";
   const canPrev = tbl.page > 1 && !loading;
@@ -178,13 +180,16 @@ export function Orders() {
             <button className="btn btn-control btn-sm" disabled={!canNext} onClick={next} aria-label="Next page">Next ›</button>
           </div>
         </div>
-        <Detail store={store} id={detail.id} data={detail.data} error={detail.error} />
+        <Detail store={store} id={detail.id} data={detail.data} error={detail.error} onReload={() => setReload((n) => n + 1)}
+          onSaved={(v) => setDetail((d) => (d.data ? { ...d, data: { ...d.data, ...v } } : d))} />
       </div>
     </section>
   );
 }
 
-function Detail({ store, id, data, error }: { store: StoreId; id: string; data?: OrderDetail; error?: string }) {
+function Detail({ store, id, data, error, onSaved, onReload }: {
+  store: StoreId; id: string; data?: OrderDetail; error?: string; onSaved: (v: { note: string | null; tags: string[] }) => void; onReload: () => void;
+}) {
   if (!id) return <div className="detail"><div className="state mute">Select an order</div></div>;
   if (!data) {
     return <div className="detail" key={id}>{error ? <ErrorState title="Couldn’t load order" why={error.slice(0, 160)} /> : <LoadingState label="Loading order…" />}</div>;
@@ -234,10 +239,7 @@ function Detail({ store, id, data, error }: { store: StoreId; id: string; data?:
           <span className="total">Total</span><span className="total r">{money(data.totalPrice)}</span>
         </div>
       </div>
-      <div className="detail-section">
-        <span className="label">Notes</span>
-        <div className="note-box">{data.note ?? "—"}</div>
-      </div>
+      <OrderNotes store={store} data={data} onSaved={onSaved} onReload={onReload} />
       <div className="detail-section" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span className="label" style={{ marginBottom: 0 }}>Actions</span>
         <div style={{ display: "flex", gap: 8 }}>
@@ -245,7 +247,7 @@ function Detail({ store, id, data, error }: { store: StoreId; id: string; data?:
           <button className="btn btn-control grow" disabled>Refund</button>
           <button className="btn btn-secondary" onClick={() => void openUrl(adminUrl(store, data.id))}>Open in Shopify</button>
         </div>
-        <div className="mute" style={{ fontSize: 11.5 }}>Write actions ship in a later release. Read-only mirror of Shopify today.</div>
+        <div className="mute" style={{ fontSize: 11.5 }}>Fulfill and refund ship in a later release.</div>
       </div>
     </div>
   );

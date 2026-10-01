@@ -76,6 +76,14 @@ scheduled) plus `status:open`.
 
 Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
 
+### Orders: notes & tags
+In the order detail pane, **Notes & tags → Edit** lets you change the note, remove tags (× strikes one out; click again
+to keep it) and add tags (type, then Enter or comma). The footer summarises the change; **Save to Shopify** (or ⌘↩ in
+the note) sends only what changed. Tags go through `tagsAdd` / `tagsRemove`, so tags you didn't touch — or that
+another app added meanwhile — are kept. The note is re-read first: if someone changed it since the order loaded, the
+save is refused and **Reload order** shows the current one. Retrying after a network error is safe. The store is
+pinned when you click Edit. Needs `write_orders`.
+
 ### Table controls (Orders, Catalog table view, Inventory · Shopify)
 - **Sort**: click a column header (buttons; `aria-sort` is set). First click uses the column's natural
   direction (dates / amounts descending), the next click flips it.
@@ -93,6 +101,18 @@ Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
 - Implementation: `src/lib/table.ts` (`useTable`, headless state + client-side apply) and
   `src/components/DataTable.tsx` (`TableHead`, `TableRow`, `ColumnsMenu`, `FilterChips`, `FilterButton`,
   `PageSizePicker`). Catalog / Inventory sort and filter client-side; Orders maps the same state to Shopify.
+
+### Inventory: Adjust stock
+On Inventory · Shopify, **±** on a variant row (or a single-variant product row) opens **Adjust stock**. Pick the location
+and a reason (correction, cycle count, damaged, shrinkage, received, restock, promotion / sample, other), then enter
+either **Change by ±** (`-2` removes two) or **Counted available** (the app works out the difference). The review shows
+available and on-hand before → after; **Apply** writes it with `inventoryAdjustQuantities` on the `available` state.
+
+Safety: the store is pinned when the dialog opens, the count you saw is sent as `changeFromQuantity` (if it moved in
+Shopify meanwhile the write is refused — **Sync & close** and review again), and each reviewed change carries an
+idempotency key, so **Retry** after a network error can't apply it twice. After the write the level is re-read from
+Shopify and the table refreshes. Untracked items have no ±. Needs `write_inventory`. Only the first 3 locations per
+item are loaded. Shopify is treated as the owner of these counts until FGINV has a backend.
 
 ### Customers
 The top 100 customers of the active store, most recently updated first, with orders, lifetime spend, company,

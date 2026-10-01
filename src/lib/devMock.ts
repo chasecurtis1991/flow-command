@@ -61,13 +61,26 @@ const orders: Order[] = [
     };
   }),
 ];
+// Browser-preview note/tag edits, kept in memory (same checks as order_notes.rs).
+const noteEdits = new Map<string, { note?: string | null; tags?: string[] }>();
+function updateNoteTags(a: Record<string, unknown>) {
+  const r = a.request as { orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] };
+  const cur = detail(r.orderId);
+  if (r.note !== null && (cur.note ?? null) !== (r.expectedNote ?? null)) throw new Error("The note changed in Shopify since this order was loaded — reload the order and review again.");
+  const lower = r.removeTags.map((t) => t.toLowerCase());
+  const tags = [...cur.tags.filter((t) => !lower.includes(t.toLowerCase())), ...r.addTags.filter((t) => !cur.tags.some((c) => c.toLowerCase() === t.toLowerCase()))];
+  const note = r.note === null ? cur.note ?? null : r.note.trim() ? r.note.trimEnd() : null;
+  noteEdits.set(r.orderId, { note, tags });
+  return { note, tags };
+}
 const detail = (id: string): OrderDetail => {
   const i = orders.findIndex((o) => o.id === id);
   if (i < 0) throw new Error("Order not found");
   const o = template(i);
   const subtotal = o[10].reduce((a, li) => a + li[2] * li[3], 0);
   return {
-    ...orders[i], subtotalPrice: usd(subtotal), totalTax: usd(0), totalShipping: usd(Math.max(0, o[3] - subtotal)), note: o[11],
+    ...orders[i], subtotalPrice: usd(subtotal), totalTax: usd(0), totalShipping: usd(Math.max(0, o[3] - subtotal)),
+    note: noteEdits.get(id)?.note !== undefined ? noteEdits.get(id)!.note : o[11], tags: noteEdits.get(id)?.tags ?? (i % 3 === 0 ? ["vip"] : []),
     shippingAddress: i < ORDER_SEED ? o[9] : `${orders[i].customerName}\n${o[9].split("\n").slice(1).join("\n")}`, customerOrdersCount: o[8], channel: o[6],
     lineItems: o[10].map((li) => ({ title: li[0], sku: li[1], quantity: li[2], price: usd(li[3]) })),
   };
@@ -168,18 +181,30 @@ const INV_RAW: RawInv[] = [
   ["Cherry Wine", "7g", "FG-CHW-7G", "ACTIVE", true, 48, 9, 2],
   ["Shipping Protection by Route", "0.98", "ROUTEINS", "ACTIVE", true, 10000000, 0, 0], // Route's app product: must be hidden by HIDDEN_INVENTORY
 ];
+const locId = (j: number) => `gid://shopify/Location/${80000 + j}`;
 const invVariants: InventoryVariant[] = INV_RAW.map((v, i) => {
   const [productTitle, variantTitle, sku, productStatus, tracked, wh, rf, committed] = v;
   const available = wh + rf - committed;
   return {
     id: `gid://shopify/ProductVariant/${40000 + i}`, productId: `gid://shopify/Product/${60000 + INV_RAW.findIndex((r) => r[0] === v[0])}`, // first row with this product title
-    productTitle, variantTitle, sku, productStatus, tracked, available,
+    productTitle, variantTitle, sku, productStatus, tracked, available, inventoryItemId: tracked ? `gid://shopify/InventoryItem/${70000 + i}` : null,
     levels: tracked ? [
-      { location: INV_LOCS[0], available: wh - committed, onHand: wh, committed },
-      { location: INV_LOCS[1], available: rf, onHand: rf, committed: 0 },
+      { location: INV_LOCS[0], locationId: locId(0), available: wh - committed, onHand: wh, committed },
+      { location: INV_LOCS[1], locationId: locId(1), available: rf, onHand: rf, committed: 0 },
     ] : [],
   };
 });
+/** Browser-preview adjust: same checks as inventory_adjust.rs (stale count, zero delta), mutates the sample in memory. */
+function adjust(a: Record<string, unknown>) {
+  const r = a.request as { inventoryItemId: string; locationId: string; delta: number; changeFrom: number };
+  const v = invVariants.find((x) => x.inventoryItemId === r.inventoryItemId);
+  const l = v?.levels.find((x) => x.locationId === r.locationId);
+  if (!v || !l) throw new Error("Missing inventory item or location id — sync inventory and try again.");
+  if (r.delta === 0) throw new Error("Adjustment is 0 — nothing to change.");
+  if (l.available !== r.changeFrom) throw new Error("The count changed in Shopify since it was loaded — sync and review again.");
+  l.available += r.delta; l.onHand += r.delta; v.available += r.delta;
+  return { delta: r.delta, available: l.available, onHand: l.onHand };
+}
 const inventory = (): InventoryResult => ({
   variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
   locations: INV_LOCS, levelsError: null, truncated: false,
@@ -259,8 +284,8 @@ SKU_GUIDE_SAMPLES.forEach((sample, i) => {
   });
   variants.forEach((v) => invVariants.push({
     id: v.id, productId: id, productTitle: sample.title, variantTitle: v.variantTitle, sku: v.sku,
-    productStatus: "ACTIVE", tracked: true, available: 20,
-    levels: INV_LOCS.map((location, j) => ({ location, available: j === 0 ? 20 : 0, onHand: j === 0 ? 20 : 0, committed: 0 })),
+    productStatus: "ACTIVE", tracked: true, available: 20, inventoryItemId: v.id.replace("ProductVariant", "InventoryItem"),
+    levels: INV_LOCS.map((location, j) => ({ location, locationId: locId(j), available: j === 0 ? 20 : 0, onHand: j === 0 ? 20 : 0, committed: 0 })),
   }));
 });
 const LETTER: Record<string, string> = { retail: "r", b2b: "b", bulk: "u" }; // CAT_RAW stores letters
@@ -299,7 +324,8 @@ function splitVariant(args: Record<string, unknown>): SplitResult {
   const variantId = `gid://shopify/ProductVariant/${900000 + splitSequence++}`;
   sourceVariants.set(productId, [{ ...v, id: variantId, title: `${v.title} — ${v.variantTitle}` }]);
   invVariants.push({ id: variantId, productId, productTitle: v.title, variantTitle: v.variantTitle,
-    sku: v.sku, productStatus: "DRAFT", tracked: true, available: 0, levels: plan.preview.locations.map((location) => ({ location, available: 0, onHand: 0, committed: 0 })) });
+    sku: v.sku, productStatus: "DRAFT", tracked: true, available: 0, inventoryItemId: variantId.replace("ProductVariant", "InventoryItem"),
+    levels: plan.preview.locations.map((location, j) => ({ location, locationId: locId(j), available: 0, onHand: 0, committed: 0 })) });
   const result: SplitResult = { productId, title: v.title, existing: false, warnings: [], status: "DRAFT" };
   splitResults.set(key, result);
   return result;
@@ -449,7 +475,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -466,7 +492,9 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_orders": return ordersPage({ first: args.first ?? 50 }).orders;
     case "list_orders_page": return ordersPage(args);
     case "get_order": return detail(String(args.orderId));
+    case "update_order_note_tags": return updateNoteTags(args);
     case "list_inventory": return inventory();
+    case "adjust_inventory": return adjust(args);
     case "list_products": return catalog();
     case "prepare_variant_split": return splitPreview(args);
     case "split_product_variant": return splitVariant(args);
