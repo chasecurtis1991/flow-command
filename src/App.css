@@ -561,7 +561,7 @@ dialog.adjust-dialog { width: 560px; }
   position: absolute; inset: 0; display: grid; place-items: center; border: 0; border-radius: 8px; padding: 0; cursor: pointer;
   background: rgba(255, 255, 255, 0.08); color: var(--text); opacity: 0; transform: scale(0.85); transition: opacity 0.16s ease, transform 0.16s ease;
 }
-.brand-mark-wrap:hover .brand-mark, .brand-mark-wrap:has(.brand-expand:focus-visible) .brand-mark { opacity: 0; transform: scale(0.85); }
+.app.collapsed .brand-mark-wrap:hover .brand-mark, .brand-mark-wrap:has(.brand-expand:focus-visible) .brand-mark { opacity: 0; transform: scale(0.85); }
 .brand-mark-wrap:hover .brand-expand, .brand-expand:focus-visible { opacity: 1; transform: none; }
 .app.collapsed { grid-template-columns: 52px minmax(0, 1fr); }
 .app.collapsed .sidebar { padding: 0 6px 12px; }
