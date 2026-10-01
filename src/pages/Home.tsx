@@ -11,7 +11,7 @@ const COLOR: Record<Tone, string> = { green: "var(--green)", amber: "var(--amber
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const CHECKING: Health = { kind: "mute", text: "Checking…" };
-const SHORTCUTS: [string, string][] = [["Low stock", "/inventory"], ["Unposted COAs", "/lab"], ["Draft products", "/catalog?status=draft"], ["Store settings", "/settings"]];
+const SHORTCUTS: [string, string][] = [["Low stock", "/inventory"], ["Unposted COAs", "/lab?posted=unposted"], ["Draft products", "/catalog?status=draft"], ["Store settings", "/settings"]];
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
 const age = (o: Order) => Date.now() - new Date(o.createdAt).getTime();

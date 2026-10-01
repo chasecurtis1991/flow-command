@@ -288,6 +288,9 @@ input:focus-visible { outline: none; }
 .row.taller { height: 46px; }
 .row.selected { background: linear-gradient(90deg, var(--accent-soft), rgba(255, 255, 255, 0.02)); }
 .row.stagger { animation: fc-rise 0.4s var(--spring) both; }
+.row.parent { cursor: pointer; }
+.row.child { background: rgba(255, 255, 255, 0.015); }
+.child-cell { padding-left: 34px; }
 .scroll { flex: 1; overflow: auto; min-height: 0; }
 .check { display: block; width: 13px; height: 13px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, 0.18); background: transparent; }
 .check.on { border-color: var(--accent); background: var(--accent); }
@@ -297,8 +300,6 @@ input:focus-visible { outline: none; }
 
 /* Orders / Inventory / Catalog column templates are built by useTable() from the visible columns (see lib/table.ts). */
 .cols-lots { grid-template-columns: 120px minmax(0, 1fr) 110px 100px 100px 120px; }
-.cols-coa { grid-template-columns: minmax(0, 1.3fr) 130px 120px 90px 90px 120px minmax(0, 1fr) 110px; }
-.cols-cust { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 120px 90px 110px 130px; }
 .cols-items { grid-template-columns: minmax(0, 1fr) 44px 80px; }
 
 /* ---------- Table controls (components/DataTable.tsx) ---------- */
@@ -352,6 +353,8 @@ input:focus-visible { outline: none; }
 .icon-btn { width: 22px; height: 22px; flex: none; border: 0; border-radius: 5px; background: transparent; color: var(--sub); cursor: pointer; display: grid; place-items: center; font-size: 13px; line-height: 1; }
 .icon-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--text); }
 .icon-btn:disabled { color: var(--mute); opacity: 0.4; cursor: default; }
+.chevron { display: inline-grid; vertical-align: middle; width: 18px; height: 18px; margin-right: 4px; font-size: 11px; transition: transform 0.15s; }
+.chevron[aria-expanded="true"] { transform: rotate(90deg); }
 
 .chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px 0 9px; border-radius: 7px; background: var(--accent-soft); color: var(--text); font-size: 12px; white-space: nowrap; flex: none; }
 .chip .k { color: var(--sub); }
@@ -420,10 +423,10 @@ input:focus-visible { outline: none; }
 .seg-sm.dark .seg-sm-item { height: 22px; }
 .seg-sm.dark .seg-sm-item.active { background: var(--raised-hover); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.5); }
 .swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(255, 255, 255, 0.06); flex: none; }
-.grid-5 { flex: 1; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; align-content: start; }
+.grid-5 { flex: 1; overflow: auto; padding: 16px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-rows: max-content; gap: 12px; align-content: start; }
 .product-card { overflow: hidden; display: flex; flex-direction: column; transition: transform 0.25s var(--spring), border-color 0.25s, box-shadow 0.25s; }
 .product-card:hover { border-color: rgba(255, 255, 255, 0.18); transform: translateY(-3px); box-shadow: 0 16px 32px -16px rgba(0, 0, 0, 0.8); }
-.product-photo { height: 120px; display: grid; place-items: center; color: rgba(255, 255, 255, 0.35); font-family: var(--mono); font-size: 11px; background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 6px, transparent 6px 12px); }
+.product-photo { aspect-ratio: 1 / 1; display: grid; place-items: center; color: rgba(255, 255, 255, 0.35); font-family: var(--mono); font-size: 11px; background-image: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 6px, transparent 6px 12px); }
 .pdf-icon { width: 26px; height: 32px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.08); display: grid; place-items: center; font-size: 9px; font-weight: 700; color: var(--sub); flex: none; }
 .avatar { width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.07)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 2px rgba(0, 0, 0, 0.5); display: grid; place-items: center; font-size: 11px; font-weight: 600; color: var(--sub); flex: none; }
 .cell-2 { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -481,6 +484,14 @@ input:focus-visible { outline: none; }
 .space-row .bar-sp { height: 8px; border-radius: 2px; background: var(--accent); opacity: 0.7; }
 .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 
+/* ---------- Lab / COAs · calendar ---------- */
+.cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.cal-cell { min-height: 84px; display: flex; flex-direction: column; gap: 2px; padding: 4px; border-radius: 7px; border: 1px solid var(--hairline); background: rgba(255, 255, 255, 0.02); }
+.cal-cell.out { border-color: transparent; background: transparent; opacity: 0.45; }
+.cal-cell.today { border-color: var(--accent); background: var(--accent-glow); }
+.cal-day { text-align: right; font-size: 11px; color: var(--mute); font-family: var(--mono); padding: 0 2px; }
+.cal-chip { display: block; width: 100%; border: 0; border-radius: 4px; padding: 2px 5px; font-size: 10.5px; line-height: 1.3; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- Scrollbars & motion ---------- */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -493,3 +504,39 @@ input:focus-visible { outline: none; }
   .kpi:hover, .action-card:hover, .product-card:hover { transform: none; }
   button:active:not(:disabled) { transform: none; }
 }
+
+/* Variant splitter: native dialog keeps focus and store selection inside the preview. */
+dialog.split-dialog { position: fixed; inset: 0; margin: auto; width: 850px; max-width: calc(100vw - 40px); max-height: calc(100vh - 56px); padding: 0; color: var(--text); background: #12141a; }
+dialog.split-dialog:not([open]) { display: none; }
+.split-dialog::backdrop { background: rgba(4, 5, 8, .68); backdrop-filter: blur(6px); }
+.split-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+.split-heading h2 { margin: 3px 0 0; font-size: 20px; letter-spacing: -.35px; }
+.split-eyebrow { color: var(--mute); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.split-intro { color: var(--sub); font-size: 13px; line-height: 1.6; margin: 10px 0 0; }
+.split-intro strong { color: var(--text); font-weight: 500; }
+.split-body { padding: 20px; overflow-y: auto; min-height: 0; }
+.split-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.split-summary > div { padding: 14px; border: 1px solid rgba(255,255,255,.09); border-radius: 8px; background: rgba(255,255,255,.025); }
+.split-summary strong { display: block; font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+.split-summary span { color: var(--mute); font-size: 12px; }
+.split-copy { color: var(--sub); font-size: 12px; line-height: 1.6; margin: 16px 0 8px; }
+.split-notes { color: var(--mute); font-size: 12px; line-height: 1.6; margin-bottom: 18px; }
+.split-notes summary, .split-warning summary { cursor: pointer; }
+.split-notes p { margin: 8px 0; }
+.split-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.split-table th { color: var(--mute); font-weight: 500; font-size: 11px; text-align: left; padding: 9px 8px; border-bottom: 1px solid rgba(255,255,255,.1); }
+.split-table td { padding: 12px 8px; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: top; }
+.split-table th:nth-child(2), .split-table td:nth-child(2) { text-align: right; white-space: nowrap; }
+.split-table th:last-child, .split-table td:last-child { text-align: right; width: 125px; white-space: nowrap; }
+.split-product { display: flex; align-items: center; gap: 10px; }
+.split-product img, .split-photo-placeholder { width: 38px; height: 38px; border-radius: 6px; object-fit: cover; background: rgba(255,255,255,.04); flex: none; }
+.split-product strong { font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; }
+.split-sku { display: block; color: var(--mute); font-size: 11px; margin-top: 3px; overflow-wrap: anywhere; }
+.split-compare { display: block; font-size: 11px; color: var(--mute); margin-top: 5px; }
+.split-warning { color: #deb776; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.split-error { color: #f38b92; font-size: 12px; line-height: 1.5; margin-top: 10px; overflow-wrap: anywhere; }
+.split-error > div { color: var(--mute); margin-top: 4px; }
+.split-progress { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 12px; margin: 18px 0; }
+.split-progress progress { width: 100%; height: 5px; accent-color: var(--accent); }
+.split-foot { align-items: center; flex-wrap: wrap; }
+.split-foot > span { margin-right: auto; font-size: 11px; }

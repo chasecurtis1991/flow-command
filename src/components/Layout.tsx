@@ -3,9 +3,9 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AppContext, prefs, type Accent, type AppCtx, type Density } from "../lib/app";
 import {
   STORES, type StoreId, type OrdersState, getActiveStore, setActiveStore, loadOrders, useOrders, isOpenFulfillment, money, storeById, invalidateInventory,
-  invalidateCatalog, invalidateOrdersTable, loadCatalog, useCatalog,
+  invalidateCatalog, invalidateOrdersTable, invalidateCustomers, invalidatePresence, invalidateAnalytics, invalidateCoas, loadCatalog, useCatalog, useCoas,
 } from "../lib/shopify";
-import { customers, unpostedCoaCount, addLot } from "../lib/mock";
+import { customers, addLot } from "../lib/mock";
 
 const NAV = [
   { path: "/home", label: "Home" },
@@ -23,6 +23,7 @@ export function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const orders = useOrders();
+  const coas = useCoas(); // badge only; the Lab page loads it
 
   const [store, setStoreState] = useState<StoreId>("retail");
   const [storeReady, setStoreReady] = useState(false);
@@ -66,6 +67,10 @@ export function Layout() {
     invalidateInventory();
     invalidateCatalog();
     invalidateOrdersTable(); // a mounted Orders page refetches its current page
+    invalidateCustomers();
+    invalidatePresence();
+    invalidateAnalytics();
+    invalidateCoas();
     void loadOrders(store, true).then((s) => {
       const ms = Math.round(performance.now() - t0);
       toast(s.status === "data" ? `Synced ${label} · ${s.orders.length} orders · ${ms} ms` : `Refresh failed · ${s.error ?? "unknown error"}`);
@@ -97,7 +102,8 @@ export function Layout() {
 
   const title = TITLES[pathname] ?? "Flow Command";
   const openCount = orders.status === "data" ? orders.orders.filter(isOpenFulfillment).length : 0;
-  const badges: Record<string, number> = { "/orders": openCount, "/lab": unpostedCoaCount };
+  const unposted = coas.status === "data" ? coas.data!.coas.filter((c) => c.postedStatus === "unposted").length : 0; // no badge until loaded
+  const badges: Record<string, number> = { "/orders": openCount, "/lab": unposted };
 
   return (
     <AppContext.Provider value={ctx}>
@@ -219,6 +225,7 @@ interface PaletteActions { refresh: () => void; openSheet: () => void; switchB2B
 
 function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: OrdersState; onClose: () => void; actions: PaletteActions }) {
   const catalog = useCatalog();
+  const coas = useCoas(); // whatever the Lab page has loaded; not fetched from here
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const s = q.trim().toLowerCase();
@@ -244,6 +251,13 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
         .slice(0, 3)
         .map((p) => mk("Product", p.title, [p.productType, money(p.minPrice)].filter(Boolean).join(" · "), "", () => actions.go(`/catalog?q=${encodeURIComponent(p.title)}`))),
     },
+    {
+      label: "COAs",
+      items: (coas.data?.coas ?? [])
+        .filter((c) => match(`${c.batch ?? ""} ${c.productName} ${c.lab ?? ""} ${c.fileName}`))
+        .slice(0, 3)
+        .map((c) => mk("COA", c.batch ?? c.productName, [c.productName, c.lab].filter(Boolean).join(" · "), "", () => actions.go(`/lab?q=${encodeURIComponent(c.batch ?? c.productName)}`))),
+    },
     { label: "Customers", items: customers.filter((c) => match(c.name)).slice(0, 2).map((c) => mk("Customer", c.name, c.store, "", () => actions.go("/customers"))) },
     {
       label: "Actions",
@@ -254,7 +268,7 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
         ["Import COA", "Parse a lab PDF", "", () => actions.go("/lab")],
       ] as [string, string, string, () => void][]).filter((a) => match(a[0])).map((a) => mk("Action", a[0], a[1], a[2], a[3])),
     },
-  ].filter((g) => g.items.length), [s, orders.orders, catalog.data]); // eslint-disable-line react-hooks/exhaustive-deps
+  ].filter((g) => g.items.length), [s, orders.orders, catalog.data, coas.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flat = groups.flatMap((g) => g.items);
   const active = Math.min(idx, Math.max(0, flat.length - 1));

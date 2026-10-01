@@ -112,7 +112,7 @@ interface Drag { id: string | null; over: string | null; after: boolean }
 const NO_DRAG: Drag = { id: null, over: null, after: false };
 const DRAG_THRESHOLD = 5;
 
-export function TableHead<Row>({ table, sticky, className }: { table: Table<Row>; sticky?: boolean; className?: string }) {
+export function TableHead<Row>({ table, sticky, className, style }: { table: Table<Row>; sticky?: boolean; className?: string; style?: CSSProperties }) {
   const [drag, setDrag] = useState<Drag>(NO_DRAG);
   const dragRef = useRef<Drag>(NO_DRAG);
   const headRef = useRef<HTMLDivElement>(null);
@@ -162,7 +162,7 @@ export function TableHead<Row>({ table, sticky, className }: { table: Table<Row>
   };
 
   return (
-    <div ref={headRef} className={`thead${sticky ? " sticky" : ""}${drag.id ? " dragging" : ""}${className ? ` ${className}` : ""}`} role="row" style={{ gridTemplateColumns: table.gridTemplate }}>
+    <div ref={headRef} className={`thead${sticky ? " sticky" : ""}${drag.id ? " dragging" : ""}${className ? ` ${className}` : ""}`} role="row" style={{ ...style, gridTemplateColumns: table.gridTemplate }}>
       {table.columns.map((col) => <Th key={col.id} table={table} col={col} drag={drag} swallowClick={swallowClick} onPointerDown={onPointerDown(col)} />)}
     </div>
   );

@@ -6,7 +6,7 @@ import {
   FINANCIAL_FILTER_VALUES, FULFILLMENT_FILTER_VALUES, OPEN_WORK_STATUSES, ORDER_DEFAULT_PAGE_SIZE, ORDER_PAGE_SIZES,
   type LineItem, type Order, type OrderDetail, type OrderSortKey, type OrdersRequest, type StoreId,
   buildOrdersQuery, channelLabel, ensureOrdersPage, fmtCreated, fulStatus, getOrder, goToOrdersPage, isOpenFulfillment, loadOrdersPage, money, moneyNum,
-  orderAdminUrl, payStatus, storeById, useOrders, useOrdersTable,
+  adminUrl, payStatus, storeById, useOrders, useOrdersTable,
 } from "../lib/shopify";
 import { type ColumnDef, sameSet, useDebounced, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
@@ -243,7 +243,7 @@ function Detail({ store, id, data, error }: { store: StoreId; id: string; data?:
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn btn-control grow" disabled>Fulfill</button>
           <button className="btn btn-control grow" disabled>Refund</button>
-          <button className="btn btn-secondary" onClick={() => void openUrl(orderAdminUrl(store, data.id))}>Open in Shopify</button>
+          <button className="btn btn-secondary" onClick={() => void openUrl(adminUrl(store, data.id))}>Open in Shopify</button>
         </div>
         <div className="mute" style={{ fontSize: 11.5 }}>Write actions ship in a later release. Read-only mirror of Shopify today.</div>
       </div>

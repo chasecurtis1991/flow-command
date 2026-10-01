@@ -16,7 +16,7 @@ export function Status({ kind, children }: { kind: Kind | "mute"; children: Reac
   );
 }
 
-export const Spinner = () => <div className="spinner" />;
+export const Spinner = ({ size }: { size?: number }) => <div className="spinner" style={size ? { width: size, height: size } : undefined} />;
 
 export function LoadingState({ label }: { label: string }) {
   return (
