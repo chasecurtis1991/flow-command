@@ -1,0 +1,3 @@
+# Debug binaries get a stable code signature before they run, so Keychain stops re-prompting on every build.
+[target.'cfg(target_os = "macos")']
+runner = "scripts/sign-dev.sh"
