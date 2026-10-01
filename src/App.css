@@ -76,12 +76,12 @@ input:focus-visible { outline: none; }
 @keyframes fc-pulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(63, 185, 122, 0.18); } 50% { box-shadow: 0 0 0 6px rgba(63, 185, 122, 0.06); } }
 
 /* ---------- Shell ---------- */
-.app { position: relative; height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); overflow: hidden; }
+.app { position: relative; height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); overflow: hidden; transition: grid-template-columns 0.24s var(--spring); }
 
 .sidebar {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.008));
   border-right: 1px solid var(--hairline);
-  display: flex; flex-direction: column; padding: 0 10px 12px; min-height: 0;
+  display: flex; flex-direction: column; padding: 0 10px 12px; min-height: 0; overflow: hidden;
 }
 .sidebar-drag { height: 52px; flex: none; } /* native traffic lights live here (trafficLightPosition 16,20) */
 .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 16px; }
@@ -96,7 +96,7 @@ input:focus-visible { outline: none; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; }
 .nav-item {
-  display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 10px;
+  display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; position: relative;
   border: 0; border-radius: 6px; background: transparent; color: var(--sub); font-weight: 400; font-size: 13px;
   text-align: left; cursor: pointer; white-space: nowrap; flex: none; text-decoration: none;
   transition: background 0.22s var(--spring), box-shadow 0.22s, color 0.18s;
@@ -106,7 +106,10 @@ input:focus-visible { outline: none; }
   background: linear-gradient(90deg, var(--accent-soft), rgba(255, 255, 255, 0.03));
   box-shadow: inset 2px 0 0 var(--accent); color: var(--text); font-weight: 600;
 }
-.nav-badge { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sub); background: rgba(255, 255, 255, 0.06); padding: 1px 6px; border-radius: 10px; }
+.nav-item .icon { flex: none; opacity: 0.8; }
+.nav-item.active .icon { opacity: 1; color: var(--accent); }
+.nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-badge { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sub); background: rgba(255, 255, 255, 0.06); padding: 1px 6px; border-radius: 10px; }
 .sidebar-section { font-size: 10.5px; color: var(--mute); padding: 0 10px 8px; letter-spacing: 0.09em; text-transform: uppercase; font-weight: 600; font-family: var(--mono); }
 .conn {
   margin-top: 12px; padding: 10px; border-radius: 8px; border: 1px solid var(--hairline); background: rgba(255, 255, 255, 0.03);
@@ -547,3 +550,19 @@ dialog.adjust-dialog { width: 560px; }
 .adjust-preview { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .adjust-preview > div { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 9px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--hairline); }
 .adjust-preview strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+
+/* Collapsible sidebar (⌘\). 76px keeps the native traffic lights (x 16–68) inside the sidebar. */
+.sidebar-toggle { width: 28px; height: 28px; margin-left: -6px; }
+.sidebar-toggle .icon { display: block; }
+.app.collapsed { grid-template-columns: 76px minmax(0, 1fr); }
+.app.collapsed .sidebar { padding: 0 8px 12px; }
+.app.collapsed .brand { justify-content: center; padding: 6px 0 16px; }
+.app.collapsed .brand > div:not(.brand-mark),
+.app.collapsed .nav-label,
+.app.collapsed .sidebar-section,
+.app.collapsed .conn > div { display: none; }
+.app.collapsed .nav-item { justify-content: center; padding: 0; }
+.app.collapsed .nav-item.active { box-shadow: inset 2px 0 0 var(--accent); background: var(--accent-soft); }
+.app.collapsed .nav-badge { position: absolute; top: 3px; right: 6px; margin: 0; padding: 0 4px; min-width: 14px; font-size: 9.5px; line-height: 14px; text-align: center; background: var(--accent); color: #06080c; font-weight: 600; }
+.app.collapsed .conn { justify-content: center; padding: 10px 0; }
+@media (prefers-reduced-motion: reduce) { .app { transition: none; } }
