@@ -577,3 +577,5 @@ dialog.adjust-dialog { width: 560px; }
 /* Native window: collapsed, the traffic lights (x 16–68) overhang the 52px rail, so the title bar content starts after them. */
 [data-native] .app.collapsed .topbar { padding-left: 36px; }
 @media (prefers-reduced-motion: reduce) { .app, .brand-mark, .brand-expand { transition: none; } }
+.kpi-link { cursor: pointer; transition: border-color 0.18s, background 0.18s; }
+.kpi-link:hover, .kpi-link:focus-visible { border-color: rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.035); }

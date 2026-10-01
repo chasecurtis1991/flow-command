@@ -87,7 +87,7 @@ export function Inventory() {
   const tab = params.get("tab") === "fginv" ? "fginv" : "shopify";
   const setTab = (t: "shopify" | "fginv") => setParams(t === "fginv" ? { tab: "fginv" } : {}, { replace: true });
   const [q, setQ] = useState("");
-  const [lowOnly, setLowOnly] = useState(false);
+  const [lowOnly, setLowOnly] = useState(() => params.get("low") === "1"); // Home's Low stock card links here with ?low=1
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const lots = useLots();
   // The store is pinned when ± is clicked (the store whose data was shown), so a store switch can't retarget the write.
