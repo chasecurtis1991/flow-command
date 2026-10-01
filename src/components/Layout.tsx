@@ -20,6 +20,9 @@ const NAV: { path: string; label: string; icon: IconName }[] = [
 ];
 const TITLES: Record<string, string> = { ...Object.fromEntries(NAV.map((n) => [n.path, n.label])), "/system": "Design system" };
 
+/** The clicked toggle unmounts on toggle; hand focus to its counterpart so keyboard users stay in the sidebar. */
+const focusToggle = (sel: string) => requestAnimationFrame(() => document.querySelector<HTMLElement>(sel)?.focus());
+
 export function Layout() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
@@ -115,11 +118,24 @@ export function Layout() {
         <aside className="sidebar">
           <div className="sidebar-drag" data-tauri-drag-region="" />
           <div className="brand">
-            <div className="brand-mark">FC</div>
-            <div>
+            {/* Collapsed: hovering (or tabbing to) the FC mark cross-fades it into the expand toggle. */}
+            <div className="brand-mark-wrap">
+              <div className="brand-mark">FC</div>
+              {collapsed && (
+                <button className="brand-expand" aria-label="Expand sidebar" aria-expanded={false} title={"Expand sidebar (⌘\\)"} onClick={() => { setCollapsed(false); focusToggle(".sidebar-toggle"); }}>
+                  <Icon name="sidebar" />
+                </button>
+              )}
+            </div>
+            <div className="brand-text">
               <div className="brand-title">Flow Command</div>
               <div className="brand-sub">Flow Gardens</div>
             </div>
+            {!collapsed && (
+              <button className="icon-btn sidebar-toggle" aria-label="Collapse sidebar" aria-expanded title={"Collapse sidebar (⌘\\)"} onClick={() => { setCollapsed(true); focusToggle(".brand-expand"); }}>
+                <Icon name="sidebar" />
+              </button>
+            )}
           </div>
           <nav className="nav">
             {NAV.map((n) => (
@@ -143,10 +159,6 @@ export function Layout() {
 
         <div className="main">
           <header className="topbar" data-tauri-drag-region="">
-            <button className="icon-btn sidebar-toggle" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-expanded={!collapsed}
-              title={`${collapsed ? "Expand" : "Collapse"} sidebar (⌘\\)`} onClick={() => setCollapsed((c) => !c)}>
-              <Icon name="sidebar" />
-            </button>
             <div className="topbar-title">
               <span className="title-bar" />
               <span key={title} className="title-text">{title}</span>

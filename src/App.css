@@ -551,18 +551,29 @@ dialog.adjust-dialog { width: 560px; }
 .adjust-preview > div { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 9px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--hairline); }
 .adjust-preview strong { font-size: 18px; font-variant-numeric: tabular-nums; }
 
-/* Collapsible sidebar (⌘\). 76px keeps the native traffic lights (x 16–68) inside the sidebar. */
-.sidebar-toggle { width: 28px; height: 28px; margin-left: -6px; }
-.sidebar-toggle .icon { display: block; }
-.app.collapsed { grid-template-columns: 76px minmax(0, 1fr); }
-.app.collapsed .sidebar { padding: 0 8px 12px; }
+/* Collapsible sidebar (⌘\): toggle sits top-right of the brand row; collapsed, the FC mark cross-fades into it on hover. */
+.brand-mark-wrap { position: relative; width: 26px; height: 26px; flex: none; }
+.brand-mark { transition: opacity 0.16s ease, transform 0.16s ease; }
+.brand-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; }
+.sidebar-toggle { width: 28px; height: 28px; margin-right: -4px; }
+.sidebar-toggle .icon, .brand-expand .icon { display: block; }
+.brand-expand {
+  position: absolute; inset: 0; display: grid; place-items: center; border: 0; border-radius: 8px; padding: 0; cursor: pointer;
+  background: rgba(255, 255, 255, 0.08); color: var(--text); opacity: 0; transform: scale(0.85); transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.brand-mark-wrap:hover .brand-mark, .brand-mark-wrap:has(.brand-expand:focus-visible) .brand-mark { opacity: 0; transform: scale(0.85); }
+.brand-mark-wrap:hover .brand-expand, .brand-expand:focus-visible { opacity: 1; transform: none; }
+.app.collapsed { grid-template-columns: 52px minmax(0, 1fr); }
+.app.collapsed .sidebar { padding: 0 6px 12px; }
 .app.collapsed .brand { justify-content: center; padding: 6px 0 16px; }
-.app.collapsed .brand > div:not(.brand-mark),
+.app.collapsed .brand-text,
 .app.collapsed .nav-label,
 .app.collapsed .sidebar-section,
 .app.collapsed .conn > div { display: none; }
 .app.collapsed .nav-item { justify-content: center; padding: 0; }
 .app.collapsed .nav-item.active { box-shadow: inset 2px 0 0 var(--accent); background: var(--accent-soft); }
-.app.collapsed .nav-badge { position: absolute; top: 3px; right: 6px; margin: 0; padding: 0 4px; min-width: 14px; font-size: 9.5px; line-height: 14px; text-align: center; background: var(--accent); color: #06080c; font-weight: 600; }
+.app.collapsed .nav-badge { position: absolute; top: 2px; right: 3px; margin: 0; padding: 0 4px; min-width: 14px; font-size: 9.5px; line-height: 14px; text-align: center; background: var(--accent); color: #06080c; font-weight: 600; }
 .app.collapsed .conn { justify-content: center; padding: 10px 0; }
-@media (prefers-reduced-motion: reduce) { .app { transition: none; } }
+/* Native window: collapsed, the traffic lights (x 16–68) overhang the 52px rail, so the title bar content starts after them. */
+[data-native] .app.collapsed .topbar { padding-left: 36px; }
+@media (prefers-reduced-motion: reduce) { .app, .brand-mark, .brand-expand { transition: none; } }
