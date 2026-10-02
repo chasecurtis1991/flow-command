@@ -71,6 +71,21 @@ export const fulfillOrder = (request: FulfillRequest) => invoke<FulfillmentInfo>
 /** Fulfillment orders with something left to ship that Shopify lets us fulfill. */
 export const fulfillable = (info: FulfillmentInfo | null) => (info?.fulfillmentOrders ?? []).filter((f) => f.canFulfill && f.lines.some((l) => l.remaining > 0));
 
+// ---- refunds (mirrors order_refund.rs) ----
+export interface RefundLine { id: string; title: string; sku: string | null; quantity: number; refundable: number; unfulfilled: number; unitPrice: string }
+export interface RefundInfo { name: string; currency: string; refunded: string; lines: RefundLine[]; locations: { id: string; name: string }[]; defaultLocationId: string | null }
+export interface RefundPreview { amount: string; subtotal: string; tax: string; shipping: string; currency: string; gateways: string[] }
+export interface LineQty { lineItemId: string; quantity: number }
+export interface RefundRequest {
+  storeId: StoreId; orderId: string; lines: LineQty[]; refundShipping: boolean; restock: boolean; locationId?: string;
+  notify: boolean; note?: string; expectedAmount: string; idempotencyKey: string;
+}
+export const getRefundInfo = (storeId: StoreId, orderId: string) => invoke<RefundInfo>("get_refund_info", { storeId, orderId });
+export const previewRefund = (storeId: StoreId, orderId: string, lines: LineQty[], refundShipping: boolean) =>
+  invoke<RefundPreview>("preview_refund", { storeId, orderId, lines, refundShipping });
+/** Rust re-asks Shopify for the total first and refuses if it no longer equals expectedAmount. */
+export const createRefund = (request: RefundRequest) => invoke<RefundPreview>("create_refund", { request });
+
 /** Mirrors order_notes.rs: note = null leaves it alone; tags are added/removed individually (others are kept). */
 export interface NoteTagsRequest { storeId: StoreId; orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] }
 export const updateOrderNoteTags = (request: NoteTagsRequest) => invoke<{ note: string | null; tags: string[] }>("update_order_note_tags", { request });

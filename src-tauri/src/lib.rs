@@ -9,6 +9,7 @@ use tauri::Manager;
 mod inventory_adjust;
 mod order_fulfill;
 mod order_notes;
+mod order_refund;
 mod variant_split;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
@@ -4260,6 +4261,9 @@ pub fn run() {
             order_notes::update_order_note_tags,
             order_fulfill::get_fulfillment,
             order_fulfill::fulfill_order,
+            order_refund::get_refund_info,
+            order_refund::preview_refund,
+            order_refund::create_refund,
             list_inventory,
             inventory_adjust::adjust_inventory,
             list_products,

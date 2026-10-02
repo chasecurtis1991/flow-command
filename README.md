@@ -86,6 +86,17 @@ quantity is checked against what's still unfulfilled, so anything ShipStation sh
 (**Close & reload**) rather than fulfilled twice. Orders split across locations offer a *Ship from* choice. Needs
 `read_/write_merchant_managed_fulfillment_orders`.
 
+### Orders: refunds
+**Refund…** in the order detail: enter quantities per item (or **Refund all items**), optionally **Refund shipping**,
+**Restock items** (to the location the order shipped from, or another), a staff-only note, and whether to email the
+customer. Shopify calculates the exact refund (items, tax, shipping, and which payment method it goes back to) as you
+change the selection. The first click only asks for confirmation — *Refund $X to Shopify Payments? This can't be
+undone.* — and **Confirm refund** sends it. Right before writing, Rust asks Shopify for the total again and refuses if
+it no longer matches what you confirmed (e.g. someone refunded an item meanwhile → **Reload order**); the payment
+transactions come from Shopify's calculation, never from the screen, and an idempotency key means a retry can't
+refund twice. Money always goes back to the original payment method(s); custom amounts and store credit aren't
+offered. Needs `write_orders`.
+
 ### Orders: notes & tags
 In the order detail pane, **Notes & tags → Edit** lets you change the note, remove tags (× strikes one out; click again
 to keep it) and add tags (type, then Enter or comma). The footer summarises the change; **Save to Shopify** (or ⌘↩ in

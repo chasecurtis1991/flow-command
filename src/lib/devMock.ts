@@ -97,6 +97,39 @@ function fulfill(a: Record<string, unknown>) {
   return st;
 }
 
+// Browser-preview refunds: refundable quantities and a running refunded total per order (no tax in the sample).
+const refundedQty = new Map<string, Record<string, number>>(), refundedAmt = new Map<string, number>();
+function refundInfo(orderId: string) {
+  const d = detail(orderId), done = refundedQty.get(orderId) ?? {};
+  return {
+    name: d.name, currency: "USD", refunded: `${(refundedAmt.get(orderId) ?? 0).toFixed(2)} USD`,
+    lines: d.lineItems.map((li, k) => ({ id: `${orderId.replace("Order", "LineItem")}-${k}`, title: li.title, sku: li.sku, quantity: li.quantity,
+      refundable: li.quantity - (done[k] ?? 0), unfulfilled: d.displayFulfillmentStatus === "FULFILLED" ? 0 : li.quantity, unitPrice: li.price })),
+    locations: [{ id: "gid://shopify/Location/80000", name: "Warehouse" }, { id: "gid://shopify/Location/80001", name: "Retail floor" }],
+    defaultLocationId: "gid://shopify/Location/80000",
+  };
+}
+function refundPreview(a: Record<string, unknown>) {
+  const info = refundInfo(String(a.orderId)), d = detail(String(a.orderId));
+  const lines = a.lines as { lineItemId: string; quantity: number }[];
+  const sub = lines.reduce((t, l) => t + Number(info.lines.find((x) => x.id === l.lineItemId)!.unitPrice.split(" ")[0]) * l.quantity, 0);
+  const ship = a.refundShipping ? Number((d.totalShipping ?? "0 USD").split(" ")[0]) : 0;
+  return { amount: (sub + ship).toFixed(2), subtotal: sub.toFixed(2), tax: "0.00", shipping: ship.toFixed(2), currency: "USD", gateways: sub + ship > 0 ? ["shopify_payments"] : [] };
+}
+function refund(a: Record<string, unknown>) {
+  const r = a.request as { orderId: string; lines: { lineItemId: string; quantity: number }[]; refundShipping: boolean; expectedAmount: string };
+  const info = refundInfo(r.orderId);
+  for (const l of r.lines) { const x = info.lines.find((y) => y.id === l.lineItemId)!; if (l.quantity > x.refundable) throw new Error(`Only ${x.refundable} of "${x.title}" can still be refunded — it may have just been refunded. Reload the order.`); }
+  const p = refundPreview({ orderId: r.orderId, lines: r.lines, refundShipping: r.refundShipping });
+  if (Number(p.amount).toFixed(2) !== Number(r.expectedAmount).toFixed(2)) throw new Error(`The refund total changed to ${p.amount} USD since you reviewed it (was ${r.expectedAmount}). Review the new amount and confirm again.`);
+  const done = refundedQty.get(r.orderId) ?? {};
+  for (const l of r.lines) { const k = Number(l.lineItemId.split("-").pop()); done[k] = (done[k] ?? 0) + l.quantity; }
+  refundedQty.set(r.orderId, done); refundedAmt.set(r.orderId, (refundedAmt.get(r.orderId) ?? 0) + Number(p.amount));
+  const o = orders.find((x) => x.id === r.orderId);
+  if (o) o.displayFinancialStatus = refundInfo(r.orderId).lines.every((l) => l.refundable === 0) ? "REFUNDED" : "PARTIALLY_REFUNDED";
+  return p;
+}
+
 // Browser-preview note/tag edits, kept in memory (same checks as order_notes.rs).
 const noteEdits = new Map<string, { note?: string | null; tags?: string[] }>();
 function updateNoteTags(a: Record<string, unknown>) {
@@ -514,7 +547,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, get_fulfillment: 300, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -533,6 +566,9 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "get_order": return detail(String(args.orderId));
     case "update_order_note_tags": return updateNoteTags(args);
     case "get_fulfillment": return fulfillmentInfo(String(args.orderId));
+    case "get_refund_info": return refundInfo(String(args.orderId));
+    case "preview_refund": return refundPreview(args);
+    case "create_refund": return refund(args);
     case "fulfill_order": return fulfill(args);
     case "list_inventory": return inventory();
     case "adjust_inventory": return adjust(args);

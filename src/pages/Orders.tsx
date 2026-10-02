@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterChips, PageSizePicker, TableHead, TableRow } from "../components/DataTable";
 import { OrderNotes } from "./OrderNotes";
 import { OrderFulfillment } from "./OrderFulfillment";
+import { RefundDialog } from "./RefundDialog";
 
 const lineTotal = (li: LineItem) => money(`${(moneyNum(li.price) * li.quantity).toFixed(2)} ${li.price.split(/\s+/)[1] ?? "USD"}`);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -96,7 +97,7 @@ export function Orders() {
   useEffect(() => {
     if (!selectedId) { setDetail({ id: "" }); return; }
     let alive = true;
-    setDetail({ id: selectedId });
+    setDetail((d) => (d.id === selectedId ? d : { id: selectedId })); // a reload keeps the order on screen (and any open dialog mounted)
     getOrder(selectedId)
       .then((d) => alive && setDetail({ id: selectedId, data: d }))
       .catch((e) => alive && setDetail({ id: selectedId, error: String(e) }));
@@ -245,11 +246,21 @@ function Detail({ store, id, data, error, onSaved, onReload }: {
       <div className="detail-section" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span className="label" style={{ marginBottom: 0 }}>Actions</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-control grow" disabled>Refund</button>
+          <RefundAction store={store} data={data} onDone={() => { onReload(); invalidateOrdersTable(); }} />
           <button className="btn btn-secondary" onClick={() => void openUrl(adminUrl(store, data.id))}>Open in Shopify</button>
         </div>
-        <div className="mute" style={{ fontSize: 11.5 }}>Refund ships in a later release. Fulfill from Shipments above.</div>
+        <div className="mute" style={{ fontSize: 11.5 }}>Fulfill from Shipments above. Refunds go back to the original payment method.</div>
       </div>
     </div>
   );
+}
+
+/** Own component so its open state doesn't sit behind Detail's early returns. */
+function RefundAction({ store, data, onDone }: { store: StoreId; data: OrderDetail; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const refunded = data.displayFinancialStatus === "REFUNDED" || data.displayFinancialStatus === "VOIDED";
+  return <>
+    <button className="btn btn-control grow" disabled={refunded} title={refunded ? "Already fully refunded" : undefined} onClick={() => setOpen(true)}>Refund…</button>
+    {open && <RefundDialog store={store} orderId={data.id} onClose={() => setOpen(false)} onDone={onDone} />}
+  </>;
 }
