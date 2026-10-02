@@ -526,7 +526,7 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
 
 // ---- analytics (Shopify's own reports via ShopifyQL; mirrors analytics_report.rs, needs read_reports) ----
 export interface SalesRow { day: string; orders: number; grossSales: number; discounts: number; returns: number; netSales: number; totalSales: number; averageOrderValue: number }
-export interface ProductSales { title: string; netSales: number; units: number }
+export interface ProductSales { title: string; netSales: number; units: number } // units −1 when the ShopifyQL version has no net_items_sold
 export interface SalesReport { currency: string; days: SalesRow[]; totals: SalesRow; topProducts: ProductSales[] }
 export const ANALYTICS_RANGES = [7, 14, 30, 90] as const;
 export type AnalyticsEntry = { status: OrdersStatus; data: SalesReport | null; error: string | null };

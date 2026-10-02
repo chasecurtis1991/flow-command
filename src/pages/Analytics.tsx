@@ -29,7 +29,7 @@ export function Analytics() {
   // Top products across stores (same title = same product; each store's report is its own top 5).
   const top = [...reports.flatMap((r) => r.topProducts).reduce((m, p) => {
     const t = m.get(p.title) ?? { title: p.title, netSales: 0, units: 0 };
-    return m.set(p.title, { ...t, netSales: t.netSales + p.netSales, units: t.units + p.units });
+    return m.set(p.title, { ...t, netSales: t.netSales + p.netSales, units: t.units < 0 || p.units < 0 ? -1 : t.units + p.units }); // −1: this API version has no units column
   }, new Map<string, { title: string; netSales: number; units: number }>()).values()].sort((a, b) => b.netSales - a.netSales).slice(0, 5);
   const topMax = Math.max(1, ...top.map((p) => p.netSales));
   const cur = reports[0]?.currency ?? "USD";
@@ -119,7 +119,7 @@ export function Analytics() {
               <span className="ellip">{p.title}</span>
               <div className="top-bar"><div style={{ width: `${Math.round((p.netSales / topMax) * 100)}%` }} /></div>
               <span className="num r">{money(`${p.netSales.toFixed(2)} ${cur}`)}</span>
-              <span className="num r mute">{nf.format(p.units)} sold</span>
+              <span className="num r mute">{p.units < 0 ? "—" : `${nf.format(p.units)} sold`}</span>
             </div>
           ))}</div>}
       </div>

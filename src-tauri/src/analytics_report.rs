@@ -38,12 +38,27 @@ pub struct SalesReport {
 
 const QUERY: &str = "query R($daily: String!, $top: String!) { shop { currencyCode } daily: shopifyqlQuery(query: $daily) { tableData { columns { name } rows } parseErrors } top: shopifyqlQuery(query: $top) { tableData { columns { name } rows } parseErrors } }";
 
-fn queries(days: u32) -> (String, String) {
+/// Metric names differ between ShopifyQL versions (the app pins API 2026-01; `sales_reversals` / `net_items_sold`
+/// only exist in newer ones). Optional metrics are dropped when Shopify says the column doesn't exist; the parser
+/// derives returns from net − gross − discounts when the column is missing.
+const DAILY: &[&str] = &["orders", "gross_sales", "discounts", "sales_reversals", "returns", "net_sales", "total_sales", "average_order_value"];
+const DAILY_OPTIONAL: &[&str] = &["sales_reversals", "returns", "average_order_value"];
+const TOP: &[&str] = &["net_sales", "net_items_sold"];
+const TOP_OPTIONAL: &[&str] = &["net_items_sold"];
+
+fn queries(days: u32, daily: &[&str], top: &[&str]) -> (String, String) {
     let since = days - 1; // "last N days" = today and the N−1 days before it
     (
-        format!("FROM sales SHOW orders, gross_sales, discounts, sales_reversals, net_sales, total_sales, average_order_value TIMESERIES day WITH TOTALS SINCE -{since}d UNTIL today ORDER BY day ASC"),
-        format!("FROM sales SHOW net_sales, net_items_sold GROUP BY product_title SINCE -{since}d UNTIL today ORDER BY net_sales DESC LIMIT 5"),
+        format!("FROM sales SHOW {} TIMESERIES day WITH TOTALS SINCE -{since}d UNTIL today ORDER BY day ASC", daily.join(", ")),
+        format!("FROM sales SHOW {} GROUP BY product_title SINCE -{since}d UNTIL today ORDER BY net_sales DESC LIMIT 5", top.join(", ")),
     )
+}
+
+/// "Column Not Found: Column 'sales_reversals' not found" → Some("sales_reversals") when that metric is optional.
+fn missing_optional(resp: &serde_json::Value, alias: &str, optional: &[&str]) -> Option<String> {
+    let e = resp["data"][alias]["parseErrors"].as_array()?.first()?.as_str()?;
+    let name = e.split('\'').nth(1)?;
+    optional.contains(&name).then(|| name.to_string())
 }
 
 /// One cell by column name; Shopify returns rows as objects keyed by column name (arrays handled too).
@@ -76,7 +91,7 @@ fn row(r: &serde_json::Value, cols: &[String], suffix: &str) -> SalesRow {
         orders: n("orders").round() as i64,
         gross_sales: n("gross_sales"),
         discounts: n("discounts"),
-        returns: n("sales_reversals"),
+        returns: cell(r, cols, &format!("sales_reversals{suffix}")).or_else(|| cell(r, cols, &format!("returns{suffix}"))).map_or(f64::NAN, |v| num(Some(v))),
         net_sales: n("net_sales"),
         total_sales: n("total_sales"),
         average_order_value: n("average_order_value"),
@@ -85,10 +100,23 @@ fn row(r: &serde_json::Value, cols: &[String], suffix: &str) -> SalesRow {
 
 fn parse(resp: &serde_json::Value) -> Result<SalesReport, String> {
     let (cols, rows) = table(resp, "daily")?;
-    let days: Vec<SalesRow> = rows.iter().map(|r| row(r, &cols, "")).filter(|r| !r.day.is_empty()).collect();
+    // No returns column in this ShopifyQL version → derive it: net = gross + discounts + returns.
+    let fix = |mut r: SalesRow| {
+        if r.returns.is_nan() {
+            r.returns = r.net_sales - r.gross_sales - r.discounts;
+        }
+        r
+    };
+    let days: Vec<SalesRow> = rows.iter().map(|r| fix(row(r, &cols, ""))).filter(|r| !r.day.is_empty()).collect();
     // WITH TOTALS repeats the window totals on every row as `<metric>__totals`; fall back to summing if absent.
     let totals = match rows.first() {
-        Some(r) if cols.iter().any(|c| c.ends_with("__totals")) => SalesRow { day: String::new(), ..row(r, &cols, "__totals") },
+        Some(r) if cols.iter().any(|c| c.ends_with("__totals")) => {
+            let mut t = fix(SalesRow { day: String::new(), ..row(r, &cols, "__totals") });
+            if t.average_order_value == 0.0 && t.orders > 0 {
+                t.average_order_value = (t.gross_sales + t.discounts) / t.orders as f64;
+            }
+            t
+        }
         _ => {
             let mut t = days.iter().fold(SalesRow::default(), |mut t, d| {
                 t.orders += d.orders;
@@ -110,7 +138,7 @@ fn parse(resp: &serde_json::Value) -> Result<SalesReport, String> {
             Some(ProductSales {
                 title: cell(r, &pcols, "product_title")?.as_str()?.to_string(),
                 net_sales: num(cell(r, &pcols, "net_sales")),
-                units: num(cell(r, &pcols, "net_items_sold")).round() as i64,
+                units: cell(r, &pcols, "net_items_sold").map_or(-1, |v| num(Some(v)).round() as i64), // −1 = not available
             })
         })
         .collect();
@@ -123,11 +151,20 @@ pub async fn sales_report(store_id: String, days: u32) -> Result<SalesReport, St
         return Err("Pick a range between 1 and 366 days.".into());
     }
     let domain = crate::store_by_id(&store_id)?.domain;
-    let (daily, top) = queries(days);
-    let resp = crate::graphql_request(&domain, QUERY, Some(serde_json::json!({ "daily": daily, "top": top })))
-        .await
-        .map_err(|e| crate::scope_denied(e, &domain, "read_reports", "reports"))?;
-    parse(&resp)
+    let (mut daily, mut top): (Vec<&str>, Vec<&str>) = (DAILY.to_vec(), TOP.to_vec());
+    for _ in 0..4 {
+        let (dq, tq) = queries(days, &daily, &top);
+        let resp = crate::graphql_request(&domain, QUERY, Some(serde_json::json!({ "daily": dq, "top": tq })))
+            .await
+            .map_err(|e| crate::scope_denied(e, &domain, "read_reports", "reports"))?;
+        let (d, t) = (missing_optional(&resp, "daily", DAILY_OPTIONAL), missing_optional(&resp, "top", TOP_OPTIONAL));
+        if d.is_none() && t.is_none() {
+            return parse(&resp);
+        }
+        daily.retain(|m| Some(*m) != d.as_deref());
+        top.retain(|m| Some(*m) != t.as_deref());
+    }
+    Err("ShopifyQL kept rejecting the report columns — the API version may need updating.".into())
 }
 
 #[cfg(test)]
@@ -136,9 +173,14 @@ mod tests {
 
     #[test]
     fn builds_queries() {
-        let (d, t) = queries(7);
+        let (d, t) = queries(7, DAILY, TOP);
         assert!(d.contains("SINCE -6d UNTIL today") && d.contains("TIMESERIES day WITH TOTALS"));
         assert!(t.contains("GROUP BY product_title") && t.contains("LIMIT 5"));
+        let e = serde_json::json!({"data": {"daily": {"parseErrors": ["Column Not Found: Column 'sales_reversals' not found"]}, "top": {"parseErrors": []}}});
+        assert_eq!(missing_optional(&e, "daily", DAILY_OPTIONAL).as_deref(), Some("sales_reversals"));
+        assert_eq!(missing_optional(&e, "top", TOP_OPTIONAL), None);
+        let required = serde_json::json!({"data": {"daily": {"parseErrors": ["Column Not Found: Column 'net_sales' not found"]}}});
+        assert_eq!(missing_optional(&required, "daily", DAILY_OPTIONAL), None); // a required metric is a real error
     }
 
     #[test]
@@ -163,6 +205,7 @@ mod tests {
             "top": {"parseErrors": [], "tableData": {"columns": [], "rows": []}}}});
         let rep = parse(&r).unwrap();
         assert_eq!((rep.totals.orders, rep.totals.gross_sales), (3, 150.0));
+        assert_eq!(rep.days[0].returns, 0.0 - 100.0 + 10.0); // derived: net(0) − gross − discounts
         assert_eq!(rep.totals.average_order_value, 140.0 / 3.0);
         let bad = serde_json::json!({"data": {"daily": {"parseErrors": ["Column Not Found"], "tableData": null}}});
         assert!(parse(&bad).unwrap_err().contains("Column Not Found"));
