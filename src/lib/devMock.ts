@@ -3,7 +3,7 @@
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
 import {
   TERPENE_LIST, type CatalogProduct, type CatalogResult, type Coa, type CoaList, type Customer, type CustomersResult, type GoogleConfig, type GoogleStatus, type ImportRequest, type ImportStep,
-  type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type OrdersSinceResult, type PresenceResult, type ProductHit,
+  type FulfillmentInfo, type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type OrdersSinceResult, type PresenceResult, type ProductHit,
 } from "./shopify";
 import type { SplitPreview, SplitResult, SplitVariant } from "./variantSplit";
 
@@ -61,6 +61,42 @@ const orders: Order[] = [
     };
   }),
 ];
+// Browser-preview fulfillment: one fulfillment order per order at Warehouse; fulfilled orders start with a USPS shipment.
+const fulfillState = new Map<string, FulfillmentInfo>();
+function fulfillmentInfo(orderId: string): FulfillmentInfo {
+  let st = fulfillState.get(orderId);
+  if (!st) {
+    const d = detail(orderId), done = d.displayFulfillmentStatus === "FULFILLED";
+    st = {
+      fulfillmentOrders: [{ id: orderId.replace("Order", "FulfillmentOrder"), status: done ? "CLOSED" : "OPEN", location: "Warehouse", canFulfill: !done,
+        lines: d.lineItems.map((li, k) => ({ id: `${orderId.replace("Order", "FulfillmentOrderLineItem")}-${k}`, title: li.title, sku: li.sku, remaining: done ? 0 : li.quantity, total: li.quantity })) }],
+      shipments: done ? [{ id: orderId.replace("Order", "Fulfillment"), status: "DELIVERED", createdAt: d.createdAt,
+        tracking: [{ company: "USPS", number: "9400111899223197428490", url: "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400111899223197428490" }],
+        items: d.lineItems.map((li) => `${li.quantity} × ${li.title}`) }] : [],
+    };
+    fulfillState.set(orderId, st);
+  }
+  return st;
+}
+function fulfill(a: Record<string, unknown>) {
+  const r = a.request as { orderId: string; fulfillmentOrderId: string; lines: { id: string; quantity: number }[]; trackingCompany?: string; trackingNumber?: string };
+  const st = fulfillmentInfo(r.orderId);
+  const fo = st.fulfillmentOrders.find((f) => f.id === r.fulfillmentOrderId);
+  if (!fo?.canFulfill) throw new Error("These items can't be fulfilled from here (status CLOSED). They may already be fulfilled — probably by ShipStation — or on hold. Reload the order.");
+  for (const l of r.lines) {
+    const line = fo.lines.find((x) => x.id === l.id)!;
+    if (l.quantity > line.remaining) throw new Error(`Only ${line.remaining} of "${line.title}" left to fulfill — it may have just been fulfilled (e.g. by ShipStation). Reload the order.`);
+  }
+  for (const l of r.lines) fo.lines.find((x) => x.id === l.id)!.remaining -= l.quantity;
+  if (fo.lines.every((l) => l.remaining === 0)) { fo.status = "CLOSED"; fo.canFulfill = false; } else fo.status = "IN_PROGRESS";
+  st.shipments.push({ id: `gid://shopify/Fulfillment/${Date.now()}`, status: "SUCCESS", createdAt: new Date().toISOString(),
+    tracking: r.trackingNumber ? [{ company: r.trackingCompany ?? null, number: r.trackingNumber, url: null }] : [],
+    items: r.lines.map((l) => `${l.quantity} × ${fo.lines.find((x) => x.id === l.id)!.title}`) });
+  const o = orders.find((x) => x.id === r.orderId);
+  if (o) o.displayFulfillmentStatus = fo.status === "CLOSED" ? "FULFILLED" : "PARTIALLY_FULFILLED";
+  return st;
+}
+
 // Browser-preview note/tag edits, kept in memory (same checks as order_notes.rs).
 const noteEdits = new Map<string, { note?: string | null; tags?: string[] }>();
 function updateNoteTags(a: Record<string, unknown>) {
@@ -478,7 +514,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, get_fulfillment: 300, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -496,6 +532,8 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_orders_page": return ordersPage(args);
     case "get_order": return detail(String(args.orderId));
     case "update_order_note_tags": return updateNoteTags(args);
+    case "get_fulfillment": return fulfillmentInfo(String(args.orderId));
+    case "fulfill_order": return fulfill(args);
     case "list_inventory": return inventory();
     case "adjust_inventory": return adjust(args);
     case "list_products": return catalog();

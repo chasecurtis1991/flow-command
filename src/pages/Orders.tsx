@@ -6,12 +6,13 @@ import {
   FINANCIAL_FILTER_VALUES, FULFILLMENT_FILTER_VALUES, OPEN_WORK_STATUSES, ORDER_DEFAULT_PAGE_SIZE, ORDER_PAGE_SIZES,
   type LineItem, type Order, type OrderDetail, type OrderSortKey, type OrdersRequest, type StoreId,
   buildOrdersQuery, channelLabel, ensureOrdersPage, fmtCreated, fulStatus, getOrder, goToOrdersPage, isOpenFulfillment, loadOrdersPage, money, moneyNum,
-  adminUrl, payStatus, storeById, useOrders, useOrdersTable,
+  adminUrl, invalidateOrdersTable, payStatus, storeById, useOrders, useOrdersTable,
 } from "../lib/shopify";
 import { type ColumnDef, sameSet, useDebounced, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterChips, PageSizePicker, TableHead, TableRow } from "../components/DataTable";
 import { OrderNotes } from "./OrderNotes";
+import { OrderFulfillment } from "./OrderFulfillment";
 
 const lineTotal = (li: LineItem) => money(`${(moneyNum(li.price) * li.quantity).toFixed(2)} ${li.price.split(/\s+/)[1] ?? "USD"}`);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
@@ -239,15 +240,15 @@ function Detail({ store, id, data, error, onSaved, onReload }: {
           <span className="total">Total</span><span className="total r">{money(data.totalPrice)}</span>
         </div>
       </div>
+      <OrderFulfillment store={store} orderId={data.id} onChanged={() => { onReload(); invalidateOrdersTable(); }} />
       <OrderNotes store={store} data={data} onSaved={onSaved} onReload={onReload} />
       <div className="detail-section" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span className="label" style={{ marginBottom: 0 }}>Actions</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-control grow" disabled>Fulfill</button>
           <button className="btn btn-control grow" disabled>Refund</button>
           <button className="btn btn-secondary" onClick={() => void openUrl(adminUrl(store, data.id))}>Open in Shopify</button>
         </div>
-        <div className="mute" style={{ fontSize: 11.5 }}>Fulfill and refund ship in a later release.</div>
+        <div className="mute" style={{ fontSize: 11.5 }}>Refund ships in a later release. Fulfill from Shipments above.</div>
       </div>
     </div>
   );

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 mod inventory_adjust;
+mod order_fulfill;
 mod order_notes;
 mod variant_split;
 
@@ -4257,6 +4258,8 @@ pub fn run() {
             list_orders_page,
             get_order,
             order_notes::update_order_note_tags,
+            order_fulfill::get_fulfillment,
+            order_fulfill::fulfill_order,
             list_inventory,
             inventory_adjust::adjust_inventory,
             list_products,

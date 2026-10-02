@@ -76,6 +76,16 @@ scheduled) plus `status:open`.
 
 Order IDs use Shopify GIDs (e.g., `gid://shopify/Order/123456789`).
 
+### Orders: shipments & manual fulfill
+The order detail's **Shipments** section lists each fulfillment (usually created by ShipStation) with its status
+(In transit, Delivered…), carrier, tracking link and items. **Fulfill…** is for the odd order shipped or handed over
+outside ShipStation: pick quantities per item (defaults to everything left), optionally a carrier + tracking number
+(USPS / UPS / FedEx / DHL get Shopify's tracking links; *Other* takes a name and URL), and **Notify customer**
+(on by default — Shopify sends its shipping confirmation). Before writing, the fulfillment order is re-read and every
+quantity is checked against what's still unfulfilled, so anything ShipStation shipped in the meantime is refused
+(**Close & reload**) rather than fulfilled twice. Orders split across locations offer a *Ship from* choice. Needs
+`read_/write_merchant_managed_fulfillment_orders`.
+
 ### Orders: notes & tags
 In the order detail pane, **Notes & tags → Edit** lets you change the note, remove tags (× strikes one out; click again
 to keep it) and add tags (type, then Enter or comma). The footer summarises the change; **Save to Shopify** (or ⌘↩ in

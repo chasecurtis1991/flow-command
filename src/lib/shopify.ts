@@ -55,6 +55,22 @@ export interface Credentials { clientId: string; clientSecret: string }
 export const getActiveStore = () => invoke<StoreDef>("get_active_store");
 export const setActiveStore = (storeId: StoreId) => invoke<StoreDef>("set_active_store", { storeId });
 export const getOrder = (orderId: string) => invoke<OrderDetail>("get_order", { orderId });
+// ---- fulfillment (mirrors order_fulfill.rs) ----
+export interface FoLine { id: string; title: string; sku: string | null; remaining: number; total: number }
+export interface FulfillmentOrder { id: string; status: string; location: string | null; canFulfill: boolean; lines: FoLine[] }
+export interface Tracking { company: string | null; number: string | null; url: string | null }
+export interface Shipment { id: string; status: string; createdAt: string; tracking: Tracking[]; items: string[] }
+export interface FulfillmentInfo { fulfillmentOrders: FulfillmentOrder[]; shipments: Shipment[] }
+export interface FulfillRequest {
+  storeId: StoreId; orderId: string; fulfillmentOrderId: string; lines: { id: string; quantity: number }[];
+  trackingCompany?: string; trackingNumber?: string; trackingUrl?: string; notifyCustomer: boolean;
+}
+export const getFulfillment = (storeId: StoreId, orderId: string) => invoke<FulfillmentInfo>("get_fulfillment", { storeId, orderId });
+/** Re-checks remaining quantities in Shopify first, so nothing ShipStation already shipped is fulfilled twice. */
+export const fulfillOrder = (request: FulfillRequest) => invoke<FulfillmentInfo>("fulfill_order", { request });
+/** Fulfillment orders with something left to ship that Shopify lets us fulfill. */
+export const fulfillable = (info: FulfillmentInfo | null) => (info?.fulfillmentOrders ?? []).filter((f) => f.canFulfill && f.lines.some((l) => l.remaining > 0));
+
 /** Mirrors order_notes.rs: note = null leaves it alone; tags are added/removed individually (others are kept). */
 export interface NoteTagsRequest { storeId: StoreId; orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] }
 export const updateOrderNoteTags = (request: NoteTagsRequest) => invoke<{ note: string | null; tags: string[] }>("update_order_note_tags", { request });
