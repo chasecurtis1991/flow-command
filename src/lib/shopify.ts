@@ -284,9 +284,20 @@ export const ADJUST_REASONS: [string, string][] = [
   ["correction", "Correction"], ["cycle_count_available", "Cycle count"], ["damaged", "Damaged"], ["shrinkage", "Shrinkage / loss"],
   ["received", "Received"], ["restock", "Restock (return)"], ["promotion", "Promotion / sample"], ["other", "Other"],
 ];
-export interface AdjustRequest { storeId: StoreId; inventoryItemId: string; locationId: string; delta: number; reason: string; changeFrom: number; idempotencyKey: string }
-export interface AdjustResult { delta: number; available: number; onHand: number }
-export const adjustInventory = (request: AdjustRequest) => invoke<AdjustResult>("adjust_inventory", { request });
+export interface StockChange { inventoryItemId: string; locationId: string; delta: number; changeFrom: number }
+export interface AdjustRequest {
+  storeId: StoreId; reason: string; changes: StockChange[]; idempotencyKey: string;
+  kind?: "adjust" | "receive" | "transfer"; reference?: string; // becomes flowcommand://<kind>/<reference> in Shopify's history
+}
+export interface LevelAfter { inventoryItemId: string; locationId: string; available: number; onHand: number }
+/** All changes go in one Shopify mutation: all apply or none do. Returns Shopify's re-read counts, one per change. */
+export const adjustInventory = (request: AdjustRequest) => invoke<LevelAfter[]>("adjust_inventory", { request });
+/** Location name → id, from the levels list_inventory returned (locations with nothing stocked don't appear). */
+export function inventoryLocations(variants: InventoryVariant[]): { id: string; name: string }[] {
+  const by = new Map<string, string>();
+  for (const v of variants) for (const l of v.levels) if (l.locationId && !by.has(l.locationId)) by.set(l.locationId, l.location);
+  return [...by].map(([id, name]) => ({ id, name }));
+}
 
 // ---- inventory cache (same shape and semantics as the orders cache) ----
 export interface InventoryState { store: StoreId | null; status: OrdersStatus; data: InventoryResult | null; error: string | null; loadedAt: number }

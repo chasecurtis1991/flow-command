@@ -114,6 +114,20 @@ idempotency key, so **Retry** after a network error can't apply it twice. After 
 Shopify and the table refreshes. Untracked items have no ±. Needs `write_inventory`. Only the first 3 locations per
 item are loaded. Shopify is treated as the owner of these counts until FGINV has a backend.
 
+### Inventory: Receive and Transfer
+**Receive** and **Transfer** in the Inventory · Shopify toolbar (also the FGINV tab's cards; Receive also from Home's
+*Receive inventory*, ⌘⇧R and the ⌘K palette) open a multi-line form: pick the location(s), search items by product,
+variant or SKU, enter quantities, and review each line's available count before → after.
+- **Receive** adds units at one location with reason *Received*. An optional lot / PO / supplier reference is stored
+  as Shopify's `referenceDocumentUri` (`flowcommand://receive/<ref>`) so it shows in the item's inventory history.
+- **Transfer** moves units from one location to another: each item becomes −N at the source and +N at the
+  destination (reason *Correction*, reference `flowcommand://transfer/T-YYYYMMDD-HHMM`). You can't move more than is
+  available at the source. Stores with a single location (Retail: Flow NC) say there's nowhere to transfer to.
+
+Every line of a request goes in **one** `inventoryAdjustQuantities` call, so Shopify applies all of it or none, with
+the same compare-and-swap counts and idempotency key as Adjust. Items must already be stocked at the chosen location(s).
+The old FGINV "Receive lot" sheet (sample data only) is gone.
+
 ### Customers
 The top 100 customers of the active store, most recently updated first, with orders, lifetime spend, company,
 location and last order. The search box runs in Shopify (relevance-ranked, so it covers every customer, not just

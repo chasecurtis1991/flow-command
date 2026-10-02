@@ -44,8 +44,6 @@ let lots: Lot[] = [
 ];
 const lotSubs = new Set<() => void>();
 export const useLots = () => useSyncExternalStore((fn) => { lotSubs.add(fn); return () => { lotSubs.delete(fn); }; }, () => lots);
-// ponytail: in-memory only; becomes a Tauri command when FGINV has a backend.
-export function addLot(l: Lot) { lots = [l, ...lots]; lotSubs.forEach((fn) => fn()); }
 export const lotsSummary = () => `${lots.length} lots · ${lots.reduce((a, l) => a + parseFloat(l.onhand), 0).toFixed(1)} lb on hand`;
 export const driftColor = (d: string) => (d === "0" ? T.mute : T.amber);
 export const coaColor = (c: Lot["coa"]) => (c === "Posted" ? T.green : c === "Pending" ? T.amber : T.red);
