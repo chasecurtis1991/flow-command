@@ -14,6 +14,7 @@ mod inventory_transfer;
 mod order_fulfill;
 mod order_notes;
 mod order_refund;
+mod product_detail;
 mod variant_split;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
@@ -4192,6 +4193,7 @@ pub fn run() {
             analytics_report::sales_report,
             activity::list_activity,
             customer_detail::get_customer,
+            product_detail::get_product_detail,
             list_coas,
             save_coa_link,
             save_coa_fields,

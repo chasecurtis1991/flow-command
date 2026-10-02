@@ -191,6 +191,14 @@ by title (a heuristic until the stores share a SKU or metafield key). Hover a ce
 the end of Catalog and Customers rows (and on grid cards) opens the product or customer in Shopify admin; the
 Orders detail panel has the same button.
 
+### Catalog: product detail panel
+Click a product (table row or grid card) to open its detail beside the list (`?sel=`; × or Esc closes it): photos,
+type / vendor / status, description, handle, tags, and a **variants × stores** table — each variant's price in Retail,
+B2B and Bulk side by side plus the active store's stock. The other stores' copies are found by handle, then exact
+title (same heuristic as *Visible in*); variants are matched by SKU, then name; `—` means not listed / no matching
+variant, `*` means the copy isn't active there. Buttons open the product in Shopify (and the other stores' copies)
+and on the online store.
+
 ### Catalog: Split variants into draft products
 In Catalog's table or grid, choose **Split variants** on a product, review the names, prices, SKUs and destination
 store, then click **Create N drafts**. Each variant becomes one separate product named `Product — Variant` with a

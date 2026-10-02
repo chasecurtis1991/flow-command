@@ -524,6 +524,18 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   return hit?.status ?? null;
 }
 
+// ---- product detail (mirrors product_detail.rs) ----
+export interface ProductVariantDetail { id: string; title: string; sku: string | null; barcode: string | null; price: string; compareAtPrice: string | null; inventory: number; tracked: boolean }
+export interface ProductDetail {
+  id: string; title: string; handle: string; status: string; vendor: string | null; productType: string | null; tags: string[]; description: string | null;
+  createdAt: string; updatedAt: string; onlineStoreUrl: string | null; images: string[]; variants: ProductVariantDetail[];
+}
+export interface StoreCopy { storeId: StoreId; state: "found" | "missing" | "error"; productId: string | null; status: string | null; matchedBy: "handle" | "title" | null; variants: ProductVariantDetail[]; error: string | null }
+export const getProductDetail = (storeId: StoreId, productId: string) => invoke<{ product: ProductDetail; copies: StoreCopy[] }>("get_product_detail", { storeId, productId });
+/** The matching variant in another store's copy: same SKU, else same variant title. */
+export const matchVariant = (v: ProductVariantDetail, copy: StoreCopy) =>
+  copy.variants.find((x) => !!v.sku && x.sku?.toLowerCase() === v.sku.toLowerCase()) ?? copy.variants.find((x) => x.title.toLowerCase() === v.title.toLowerCase());
+
 // ---- customer detail (mirrors customer_detail.rs) ----
 export interface CustomerOrder { id: string; name: string; createdAt: string; financialStatus: string | null; fulfillmentStatus: string | null; cancelled: boolean; total: string }
 export interface CustomerDetail {
