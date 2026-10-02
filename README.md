@@ -173,6 +173,24 @@ switching store clears it): orders / lifetime spend / average order, email (clic
 consent, default address, B2B company, tags and note, and their 10 most recent orders with payment / fulfillment
 status. A recent order opens in Orders when it's among the loaded recent orders, otherwise in Shopify admin.
 
+### Voice assistant (ElevenLabs)
+**Setup (once):** Settings → *ElevenLabs · voice assistant*: paste your ElevenLabs API key (saved to the Keychain,
+never sent to the web view), pick a voice (your cloned voices are listed first), click **Set up agent**. That creates a
+private "Flow Command" agent plus its 7 client tools in your ElevenLabs workspace (ids in `<app data>/voice-config.json`;
+**Update agent** re-applies the prompt/tools after an app update or a voice change).
+
+**Use:** **Talk** in the title bar (⌘J) opens the assistant drawer. **Start talking** (macOS asks for the mic once) or
+type a question. The conversation keeps going while you change screens or hide the drawer (the Talk dot stays green);
+**End** stops it and releases the mic. The agent is told which screen, store and record you're on.
+
+What it can do: look up stock (`find_inventory`), search orders (`find_orders`), read one order (`get_order` —
+spoken numbers like "R10482" match "#R-10482"), Shopify sales for a range (`sales_summary`), open a screen
+(`open_screen`). For changes it can only *propose*: `propose_inventory_adjustment` and `propose_order_update` put a
+**review card** in the drawer (store, item/order, before → after); nothing is written until you click **Apply**, which
+runs the same Adjust / Notes & tags commands with their compare-and-swap and idempotency safeguards, then tells the
+agent the real result. Ambiguous items, locations or orders come back as a question. Tools take an explicit store
+("in B2B…"), defaulting to the open one. Audio and transcripts are processed by ElevenLabs.
+
 ### Analytics
 Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
 match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and

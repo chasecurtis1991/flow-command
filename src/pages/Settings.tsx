@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { prefs, useApp } from "../lib/app";
 import {
   GOOGLE_PREFS, type GoogleConfig, type GoogleStatus, OPENROUTER_MODEL_PREF, type OpenRouterStatus, STORES, getCredentials, getOpenRouterStatus, googleConfig, googleStatus, saveCredentials, saveOpenRouterKey,
-  seedGoogleConfig, storeById, useOrders,
+  seedGoogleConfig, storeById, useOrders, type Voice, type VoiceStatus, listVoices, saveElevenLabsKey, setupVoiceAgent, voiceStatus,
 } from "../lib/shopify";
 import { Pill, SampleData, Spinner, Status } from "../components/ui";
 
@@ -110,6 +110,8 @@ export function Settings() {
           <button className="btn btn-ghost btn-sm" onClick={() => void openUrl("https://openrouter.ai/keys")}>openrouter.ai/keys ↗</button>
         </div>
       </Group>
+
+      <VoiceSettings toast={toast} />
 
       <Group title="Google · COA mirror">
         {GOOGLE_FIELDS.map(([k, label, ph, help]) => (
@@ -239,5 +241,65 @@ function CredsModal({ onClose, onSaved }: { onClose: () => void; onSaved: (msg: 
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** ElevenLabs key (Keychain), voice picker, and one-click agent setup for the voice assistant. */
+function VoiceSettings({ toast }: { toast: (m: string) => void }) {
+  const [st, setSt] = useState<VoiceStatus | null>(null);
+  const [key, setKey] = useState("");
+  const [voices, setVoices] = useState<Voice[] | null>(null);
+  const [voice, setVoice] = useState("");
+  const [busy, setBusy] = useState<"key" | "voices" | "setup" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const refresh = useCallback(() => voiceStatus().then((s) => { setSt(s); setVoice((v) => v || s.voiceId || ""); }).catch((e) => setErr(String(e))), []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  const loadVoices = () => { setBusy("voices"); setErr(null); listVoices().then(setVoices).catch((e) => setErr(String(e))).finally(() => setBusy(null)); };
+  useEffect(() => { if (st?.hasKey && !voices) loadVoices(); }, [st?.hasKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveKey = (k: string) => {
+    setBusy("key"); setErr(null);
+    saveElevenLabsKey(k).then((m) => { toast(m); setKey(""); setVoices(null); return refresh(); }).catch((e) => setErr(String(e))).finally(() => setBusy(null));
+  };
+  const setup = () => {
+    setBusy("setup"); setErr(null);
+    setupVoiceAgent(voice, voices?.find((v) => v.id === voice)?.name).then(() => { toast("Voice agent ready — press Talk in the title bar"); return refresh(); })
+      .catch((e) => setErr(String(e))).finally(() => setBusy(null));
+  };
+  return (
+    <Group title="ElevenLabs · voice assistant">
+      <div className="list-row">
+        <span>API key</span>
+        {st === null ? <Status kind="mute">Checking…</Status> : st.hasKey ? <Pill kind="green">Key saved · ends in {st.keyHint}</Pill> : <Pill kind="amber">No key — the assistant is off</Pill>}
+      </div>
+      <div className="list-row tall" style={{ gap: 8 }}>
+        <input type="password" className="input input-dark" placeholder="ElevenLabs API key" value={key} style={{ flex: 1, minWidth: 0 }} disabled={!!busy}
+          onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => e.key === "Enter" && key.trim() && saveKey(key.trim())} />
+        <button className="btn btn-primary btn-sm" disabled={!key.trim() || !!busy} onClick={() => saveKey(key.trim())}>{busy === "key" ? "Saving…" : "Save to Keychain"}</button>
+        {st?.hasKey && <button className="btn btn-secondary btn-sm" disabled={!!busy} onClick={() => saveKey("")}>Remove key</button>}
+      </div>
+      {st?.hasKey && <>
+        <div className="list-row tall" style={{ gap: 10 }}>
+          <span className="two-line"><span>Voice</span><span className="second">Your own (cloned) voices are listed first</span></span>
+          <select className="input input-dark" style={{ width: 260 }} value={voice} disabled={!!busy || !voices} onChange={(e) => setVoice(e.target.value)}>
+            <option value="">{voices ? "Choose a voice…" : busy === "voices" ? "Loading voices…" : "—"}</option>
+            {voices?.map((v) => <option key={v.id} value={v.id}>{v.name}{v.category && v.category !== "premade" ? ` (${v.category})` : ""}</option>)}
+          </select>
+        </div>
+        <div className="list-row">
+          <span className="two-line">
+            <span>Agent</span>
+            <span className="second">{st.agentId ? `${st.voiceName ?? "Custom voice"} · ${st.needsUpdate ? "update available" : "ready"} · ${st.agentId}` : "Not set up yet — creates a private “Flow Command” agent and its tools in your ElevenLabs workspace"}</span>
+          </span>
+          <button className="btn btn-primary btn-sm" disabled={!voice || !!busy} onClick={setup}>
+            {busy === "setup" ? "Setting up…" : !st.agentId ? "Set up agent" : st.needsUpdate || voice !== st.voiceId ? "Update agent" : "Re-apply"}
+          </button>
+        </div>
+      </>}
+      {err && <div className="list-row"><span className="sub" style={{ color: "var(--red)", fontSize: 12.5 }}>{err.slice(0, 300)}</span></div>}
+      <div className="list-row">
+        <span className="sub" style={{ fontSize: 12.5 }}>Key stays in the Keychain; audio and transcripts go to ElevenLabs. The assistant can only look things up — changes become review cards you Apply.</span>
+        <button className="btn btn-ghost btn-sm" onClick={() => void openUrl("https://elevenlabs.io/app/settings/api-keys")}>API keys ↗</button>
+      </div>
+    </Group>
   );
 }

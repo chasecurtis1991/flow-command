@@ -188,7 +188,7 @@ function ordersPage(args: Record<string, unknown>): OrdersPage {
   const get = SORT_GET[String(args.sortKey ?? "CREATED_AT")] ?? SORT_GET.CREATED_AT;
   const dir = args.reverse === false ? 1 : -1;
   const q = typeof args.query === "string" ? args.query.trim() : "";
-  const rows = storeOrders().filter((o) => !q || matchesQuery(o, q))
+  const rows = storeOrders(typeof args.storeId === "string" ? args.storeId : active).filter((o) => !q || matchesQuery(o, q))
     .sort((a, b) => { const x = get(a), y = get(b); return (x < y ? -1 : x > y ? 1 : 0) * dir; });
   const start = typeof args.after === "string" && args.after ? Number(atob(args.after)) || 0 : 0; // cursor = base64 row offset
   const page = rows.slice(start, start + first);
@@ -349,8 +349,8 @@ function transfer(a: Record<string, unknown>) {
     levels: r.lines.flatMap((l) => [r.originLocationId, r.destinationLocationId].map((loc) => { const x = at(l.inventoryItemId, loc)!; return { inventoryItemId: l.inventoryItemId, locationId: loc, available: x.available, onHand: x.onHand }; })),
   };
 }
-const inventory = (): InventoryResult => ({
-  variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
+const inventory = (store = active): InventoryResult => ({
+  variants: invVariants.filter((v) => store === "retail" || (store === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
   locations: INV_LOCS, levelsError: null, truncated: false,
 });
 
@@ -642,7 +642,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "preview_refund": return refundPreview(args);
     case "create_refund": return refund(args);
     case "fulfill_order": return fulfill(args);
-    case "list_inventory": return inventory();
+    case "list_inventory": return inventory(typeof args.storeId === "string" ? args.storeId : active);
     case "adjust_inventory": return adjust(args);
     case "transfer_inventory": return transfer(args);
     case "list_products": return catalog();
@@ -651,6 +651,12 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
+    // Voice: the preview can't reach ElevenLabs; pretend it's set up so the panel and tools can be reviewed.
+    case "voice_status": return { hasKey: true, keyHint: "…mock", agentId: "agent_mock", voiceId: "v1", voiceName: "Preview voice", needsUpdate: false };
+    case "list_voices": return [{ id: "v1", name: "Preview voice", category: "cloned" }, { id: "v2", name: "Rachel", category: "premade" }];
+    case "save_elevenlabs_key": return "ElevenLabs key saved (browser mock — nothing stored)";
+    case "setup_voice_agent": return { agentId: "agent_mock", voiceId: args.voiceId };
+    case "voice_session_token": case "voice_text_session_url": throw new Error("The browser preview can't connect to ElevenLabs — use npm run tauri dev.");
     case "get_product_detail": return productDetail(String(args.storeId), String(args.productId));
     case "get_customer": return customerDetail(String(args.customerId));
     case "list_activity": return activityFeed(String(args.storeId), Number(args.first ?? 25));
