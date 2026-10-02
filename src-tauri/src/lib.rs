@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 mod activity;
 mod analytics_report;
+mod customer_detail;
 mod inventory_adjust;
 mod inventory_transfer;
 mod order_fulfill;
@@ -4190,6 +4191,7 @@ pub fn run() {
             list_product_presence,
             analytics_report::sales_report,
             activity::list_activity,
+            customer_detail::get_customer,
             list_coas,
             save_coa_link,
             save_coa_fields,

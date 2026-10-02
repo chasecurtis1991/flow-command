@@ -227,6 +227,19 @@ function customers(args: Record<string, unknown>): CustomersResult {
   const first = Math.min(100, Math.max(1, Number(args.first ?? 100)));
   return { customers: rows.slice(0, first), hasNextPage: rows.length > first, totalCount: rows.length, totalPrecision: "EXACT" };
 }
+/** Browser-preview customer detail, built from the sample customers and their orders. */
+function customerDetail(id: string) {
+  const c = customers({ first: 100 }).customers.find((x) => x.id === id);
+  if (!c) throw new Error("Customer not found.");
+  const mine = orders.filter((o) => o.customerName === c.displayName).slice(0, 10);
+  return {
+    id, displayName: c.displayName, email: c.email, phone: c.phone ?? "+1 503 555 0142", createdAt: "2025-03-14T15:00:00Z", note: mine.length > 3 ? "Prefers discreet packaging." : null,
+    tags: c.tags.length ? c.tags : mine.length > 3 ? ["vip"] : [], state: "ENABLED", verifiedEmail: true, taxExempt: !!c.company, ordersCount: c.ordersCount, amountSpent: c.amountSpent,
+    address: c.location ? `2214 Alder St\n${c.location} 97214\nUnited States` : null, emailMarketing: mine.length % 2 ? "SUBSCRIBED" : "NOT_SUBSCRIBED", smsMarketing: null,
+    companies: c.company ? [c.company] : [],
+    recentOrders: mine.map((o) => ({ id: o.id, name: o.name, createdAt: o.createdAt, financialStatus: o.displayFinancialStatus, fulfillmentStatus: o.displayFulfillmentStatus, cancelled: !!o.cancelled, total: o.totalPrice })),
+  };
+}
 /** Browser-preview activity: a few events per sample order (new order, fulfilled, refunded) plus a product and a customer. */
 function activityFeed(storeId: string, first: number) {
   const out = storeOrders(storeId).slice(0, 10).flatMap((o, i) => {
@@ -588,7 +601,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_activity: 400, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_activity: 400, get_customer: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -620,6 +633,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
+    case "get_customer": return customerDetail(String(args.customerId));
     case "list_activity": return activityFeed(String(args.storeId), Number(args.first ?? 25));
     case "sales_report": return salesReport(String(args.storeId), Number(args.days));
     case "list_coas": return coaList();

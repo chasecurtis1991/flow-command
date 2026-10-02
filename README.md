@@ -167,6 +167,12 @@ new orders / fulfilled / published, amber for refunds / restocks / removals, red
 Click a row: the active store's orders open in Orders, everything else opens in Shopify admin. **Refresh** reloads;
 a store that can't be reached is named under the feed.
 
+### Customers: detail panel
+Click a customer to open their detail beside the list (the selection is in the URL as `?sel=`; × or Esc closes it,
+switching store clears it): orders / lifetime spend / average order, email (click to mail) and phone with marketing
+consent, default address, B2B company, tags and note, and their 10 most recent orders with payment / fulfillment
+status. A recent order opens in Orders when it's among the loaded recent orders, otherwise in Shopify admin.
+
 ### Analytics
 Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
 match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and

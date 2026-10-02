@@ -524,6 +524,15 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   return hit?.status ?? null;
 }
 
+// ---- customer detail (mirrors customer_detail.rs) ----
+export interface CustomerOrder { id: string; name: string; createdAt: string; financialStatus: string | null; fulfillmentStatus: string | null; cancelled: boolean; total: string }
+export interface CustomerDetail {
+  id: string; displayName: string; email: string | null; phone: string | null; createdAt: string; note: string | null; tags: string[];
+  state: string | null; verifiedEmail: boolean; taxExempt: boolean; ordersCount: number; amountSpent: string; address: string | null;
+  emailMarketing: string | null; smsMarketing: string | null; companies: string[]; recentOrders: CustomerOrder[];
+}
+export const getCustomer = (storeId: StoreId, customerId: string) => invoke<CustomerDetail>("get_customer", { storeId, customerId });
+
 // ---- activity (mirrors activity.rs: Shopify's event log, filtered to what's worth a glance) ----
 export interface Activity { id: string; createdAt: string; message: string; action: string | null; subjectType: string | null; subjectId: string | null }
 export type StoreActivity = Activity & { store: StoreId };
