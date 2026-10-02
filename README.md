@@ -86,6 +86,17 @@ quantity is checked against what's still unfulfilled, so anything ShipStation sh
 (**Close & reload**) rather than fulfilled twice. Orders split across locations offer a *Ship from* choice. Needs
 `read_/write_merchant_managed_fulfillment_orders`.
 
+### Orders: refunds
+**Refund…** in the order detail: enter quantities per item (or **Refund all items**), optionally **Refund shipping**,
+**Restock items** (to the location the order shipped from, or another), a staff-only note, and whether to email the
+customer. Shopify calculates the exact refund (items, tax, shipping, and which payment method it goes back to) as you
+change the selection. The first click only asks for confirmation — *Refund $X to Shopify Payments? This can't be
+undone.* — and **Confirm refund** sends it. Right before writing, Rust asks Shopify for the total again and refuses if
+it no longer matches what you confirmed (e.g. someone refunded an item meanwhile → **Reload order**); the payment
+transactions come from Shopify's calculation, never from the screen, and an idempotency key means a retry can't
+refund twice. Money always goes back to the original payment method(s); custom amounts and store credit aren't
+offered. Needs `write_orders`.
+
 ### Orders: notes & tags
 In the order detail pane, **Notes & tags → Edit** lets you change the note, remove tags (× strikes one out; click again
 to keep it) and add tags (type, then Enter or comma). The footer summarises the change; **Save to Shopify** (or ⌘↩ in
@@ -130,11 +141,15 @@ item are loaded. Shopify is treated as the owner of these counts until FGINV has
 variant or SKU, enter quantities, and review each line's available count before → after.
 - **Receive** adds units at one location with reason *Received*. An optional lot / PO / supplier reference is stored
   as Shopify's `referenceDocumentUri` (`flowcommand://receive/<ref>`) so it shows in the item's inventory history.
-- **Transfer** moves units from one location to another: each item becomes −N at the source and +N at the
-  destination (reason *Correction*, reference `flowcommand://transfer/T-YYYYMMDD-HHMM`). You can't move more than is
-  available at the source. Stores with a single location (Retail: Flow NC) say there's nowhere to transfer to.
+- **Transfer** creates a real Shopify Transfer (admin → Products → Transfers; needs `write_inventory_transfers`,
+  `write_inventory_shipments`, `write_inventory_shipments_received_items`). **Move now** creates it, ships it and
+  receives it at the destination in one go; **In transit** (optional carrier + tracking) leaves it for the destination
+  to receive in Shopify when it arrives. You can't move more than is available at the source. Each step carries an
+  idempotency key and checks what already exists, so if a step fails, **Retry** finishes the same transfer instead
+  of creating another. The result links to the transfer in Shopify. Stores with a single location (Retail: Flow NC)
+  say there's nowhere to transfer to.
 
-Every line of a request goes in **one** `inventoryAdjustQuantities` call, so Shopify applies all of it or none, with
+Receive sends every line in **one** `inventoryAdjustQuantities` call, so Shopify applies all of it or none, with
 the same compare-and-swap counts and idempotency key as Adjust. Items must already be stocked at the chosen location(s).
 The old FGINV "Receive lot" sheet (sample data only) is gone.
 
@@ -145,10 +160,14 @@ the 100 shown); the toolbar count says `Showing 100 of 4,213 · search to narrow
 filters, sort and **Columns** work like the other tables; **Sync now** refetches. Needs `read_customers`.
 
 ### Analytics
-Orders per day and per-store Orders / Revenue / Avg order for the last **7 / 14 / 30** days, derived from each
-store's orders (`list_orders_since`, all three stores fetched in parallel; cancelled and test orders excluded). No
-ShopifyQL, so no `read_reports` scope is needed. Days are bucketed in the Mac's local time. A store that can't be
-reached shows **Unreachable** with its own Retry. The inventory-drift chart is still sample data (FGINV has no backend).
+Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
+match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and
+Avg order** for the last **7 / 14 / 30 / 90** days, an **Orders per day** chart summed across stores (days in each
+shop's own timezone), and **Top products by net sales** across stores. One request per store
+(`FROM sales SHOW orders, gross_sales, discounts, sales_reversals, net_sales, total_sales, average_order_value
+TIMESERIES day WITH TOTALS …` plus a `GROUP BY product_title … LIMIT 5`), all three in parallel; a store that fails
+shows **Unreachable** with the reason and its own Retry. No order cap (the old orders-derived version stopped at
+2,000). The inventory-drift chart is still sample data (FGINV has no backend).
 
 ### Catalog: Visible in, Open in Shopify
 **Visible in** shows a chip for every store where the product is active. The active store answers from the product

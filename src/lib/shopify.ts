@@ -71,6 +71,21 @@ export const fulfillOrder = (request: FulfillRequest) => invoke<FulfillmentInfo>
 /** Fulfillment orders with something left to ship that Shopify lets us fulfill. */
 export const fulfillable = (info: FulfillmentInfo | null) => (info?.fulfillmentOrders ?? []).filter((f) => f.canFulfill && f.lines.some((l) => l.remaining > 0));
 
+// ---- refunds (mirrors order_refund.rs) ----
+export interface RefundLine { id: string; title: string; sku: string | null; quantity: number; refundable: number; unfulfilled: number; unitPrice: string }
+export interface RefundInfo { name: string; currency: string; refunded: string; lines: RefundLine[]; locations: { id: string; name: string }[]; defaultLocationId: string | null }
+export interface RefundPreview { amount: string; subtotal: string; tax: string; shipping: string; currency: string; gateways: string[] }
+export interface LineQty { lineItemId: string; quantity: number }
+export interface RefundRequest {
+  storeId: StoreId; orderId: string; lines: LineQty[]; refundShipping: boolean; restock: boolean; locationId?: string;
+  notify: boolean; note?: string; expectedAmount: string; idempotencyKey: string;
+}
+export const getRefundInfo = (storeId: StoreId, orderId: string) => invoke<RefundInfo>("get_refund_info", { storeId, orderId });
+export const previewRefund = (storeId: StoreId, orderId: string, lines: LineQty[], refundShipping: boolean) =>
+  invoke<RefundPreview>("preview_refund", { storeId, orderId, lines, refundShipping });
+/** Rust re-asks Shopify for the total first and refuses if it no longer equals expectedAmount. */
+export const createRefund = (request: RefundRequest) => invoke<RefundPreview>("create_refund", { request });
+
 /** Mirrors order_notes.rs: note = null leaves it alone; tags are added/removed individually (others are kept). */
 export interface NoteTagsRequest { storeId: StoreId; orderId: string; note: string | null; expectedNote: string | null; addTags: string[]; removeTags: string[] }
 export const updateOrderNoteTags = (request: NoteTagsRequest) => invoke<{ note: string | null; tags: string[] }>("update_order_note_tags", { request });
@@ -308,6 +323,13 @@ export interface AdjustRequest {
 export interface LevelAfter { inventoryItemId: string; locationId: string; available: number; onHand: number }
 /** All changes go in one Shopify mutation: all apply or none do. Returns Shopify's re-read counts, one per change. */
 export const adjustInventory = (request: AdjustRequest) => invoke<LevelAfter[]>("adjust_inventory", { request });
+/** Mirrors inventory_transfer.rs: a Shopify Transfer (create → ship → receive). Retrying with the same key resumes it. */
+export interface TransferRequest {
+  storeId: StoreId; originLocationId: string; destinationLocationId: string; lines: { inventoryItemId: string; quantity: number }[];
+  reference?: string; note?: string; receiveNow: boolean; trackingCompany?: string; trackingNumber?: string; idempotencyKey: string;
+}
+export interface TransferResult { transferId: string; name: string; status: string; received: boolean; levels: LevelAfter[] }
+export const transferInventory = (request: TransferRequest) => invoke<TransferResult>("transfer_inventory", { request });
 /** Location name → id, from the levels list_inventory returned (locations with nothing stocked don't appear). */
 export function inventoryLocations(variants: InventoryVariant[]): { id: string; name: string }[] {
   const by = new Map<string, string>();
@@ -502,47 +524,29 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   return hit?.status ?? null;
 }
 
-// ---- analytics (derived from orders — no ShopifyQL, which would need read_reports; mirrors list_orders_since in lib.rs) ----
-export interface OrderStub { createdAt: string; total: string; cancelled: boolean } // total "128.00 USD" (currentTotalPriceSet)
-export interface OrdersSinceResult { orders: OrderStub[]; truncated: boolean } // truncated: hit the 10-page cap (2,000 orders)
-export const ANALYTICS_RANGES = [7, 14, 30] as const;
-export type AnalyticsEntry = { status: OrdersStatus; data: OrdersSinceResult | null; error: string | null };
+// ---- analytics (Shopify's own reports via ShopifyQL; mirrors analytics_report.rs, needs read_reports) ----
+export interface SalesRow { day: string; orders: number; grossSales: number; discounts: number; returns: number; netSales: number; totalSales: number; averageOrderValue: number }
+export interface ProductSales { title: string; netSales: number; units: number } // units −1 when the ShopifyQL version has no net_items_sold
+export interface SalesReport { currency: string; days: SalesRow[]; totals: SalesRow; topProducts: ProductSales[] }
+export const ANALYTICS_RANGES = [7, 14, 30, 90] as const;
+export type AnalyticsEntry = { status: OrdersStatus; data: SalesReport | null; error: string | null };
 export interface AnalyticsState { days: number; loadedAt: number; stores: Record<StoreId, AnalyticsEntry> }
 let anState: AnalyticsState = { days: 0, loadedAt: 0, stores: { retail: IDLE, b2b: IDLE, bulk: IDLE } };
 let anSeq = 0;
 const anSubs = new Set<() => void>();
 const anEmit = () => anSubs.forEach((fn) => fn());
 
-const localDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-/** Local YYYY-MM-DD of today minus (days − 1): the first day of a `days`-day window that ends today. */
-export function sinceFor(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - (days - 1));
-  return localDay(d);
-}
-/** One bucket per local calendar day from today−(days−1) to today; cancelled orders and anything outside the window are skipped. */
-// ponytail: local-time buckets, not the shop IANA zone; fine while the Mac and the shops share Eastern.
-export function bucketByDay(orders: OrderStub[], days: number): { key: string; label: string; orders: number; revenue: number }[] {
-  const out = Array.from({ length: days }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (days - 1 - i));
-    return { key: localDay(d), label: dayFmt.format(d), orders: 0, revenue: 0 };
-  });
-  const at = new Map(out.map((b, i) => [b.key, i]));
-  for (const o of orders) {
-    const i = o.cancelled ? undefined : at.get(localDay(new Date(o.createdAt)));
-    if (i == null) continue;
-    out[i].orders += 1;
-    out[i].revenue += moneyNum(o.total);
-  }
-  return out;
+/** Orders per shop day summed across reports (days come from Shopify in each shop's timezone). */
+export function ordersByDay(reports: SalesReport[]): { key: string; label: string; orders: number }[] {
+  const by = new Map<string, number>();
+  for (const r of reports) for (const d of r.days) by.set(d.day, (by.get(d.day) ?? 0) + d.orders);
+  return [...by].sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, orders]) => ({ key, orders, label: dayFmt.format(new Date(`${key}T12:00:00`)) }));
 }
 
-/** Fetch order stubs for all three stores concurrently (each settles on its own; a newer `days` supersedes in-flight results). Never rejects. */
+/** Fetch Shopify's sales report for all three stores concurrently (each settles on its own; a newer `days` supersedes in-flight results). Never rejects. */
 export function loadAnalytics(days: number, force = false): Promise<AnalyticsState> {
   if (!force && anState.days === days && STORES.every((s) => anState.stores[s.id].status !== "idle")) return Promise.resolve(anState);
   const seq = ++anSeq;
-  const since = sinceFor(days);
   anState = { ...anState, days, stores: { retail: LOADING, b2b: LOADING, bulk: LOADING } };
   anEmit();
   const settle = (id: StoreId, entry: AnalyticsEntry) => {
@@ -551,7 +555,7 @@ export function loadAnalytics(days: number, force = false): Promise<AnalyticsSta
     anEmit();
   };
   return Promise.all(STORES.map((s) =>
-    invoke<OrdersSinceResult>("list_orders_since", { storeId: s.id, since })
+    invoke<SalesReport>("sales_report", { storeId: s.id, days })
       .then((data) => settle(s.id, { status: "data", data, error: null }))
       .catch((e) => settle(s.id, { status: "error", data: null, error: String(e) })),
   )).then(() => anState);
@@ -802,7 +806,7 @@ export function swatchColor(seed: string): string {
 export const isScopeError = (e: string | null | undefined, scope = "read_products") => new RegExp(`${scope}|access denied`, "i").test(e ?? "");
 
 /** Deep link into Shopify admin for an Order / Product / Customer GID (gid://shopify/<Type>/<id>); other types land on the admin root. */
-const ADMIN_SEGMENT: Record<string, string> = { Order: "orders", Product: "products", Customer: "customers" };
+const ADMIN_SEGMENT: Record<string, string> = { Order: "orders", Product: "products", Customer: "customers", InventoryTransfer: "transfers" };
 export const adminUrl = (store: StoreId, gid: string) => {
   const root = `https://admin.shopify.com/store/${storeById(store).domain.replace(".myshopify.com", "")}`;
   const [, type = "", id] = /^gid:\/\/shopify\/(\w+)\/(\d+)/.exec(gid) ?? [];

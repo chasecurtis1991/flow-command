@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { adjustInventory, invalidateInventory, inventoryLocations, storeById, type InventoryVariant, type LevelAfter, type StockChange, type StoreId } from "../lib/shopify";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { adjustInventory, adminUrl, invalidateInventory, inventoryLocations, storeById, transferInventory, type InventoryVariant, type LevelAfter, type StockChange, type StoreId, type TransferResult } from "../lib/shopify";
 import { Pill } from "../components/ui";
 
 export type MoveMode = "receive" | "transfer";
@@ -22,6 +23,10 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<LevelAfter[] | null>(null);
+  const [transfer, setTransfer] = useState<TransferResult | null>(null);
+  const [receiveNow, setReceiveNow] = useState(true); // transfer: "Move now" vs leave "In transit"
+  const [trackCompany, setTrackCompany] = useState("");
+  const [trackNumber, setTrackNumber] = useState("");
 
   useEffect(() => {
     const el = dialog.current!;
@@ -52,7 +57,7 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
     : [{ inventoryItemId: c.v.inventoryItemId!, locationId: from, delta: -c.n, changeFrom: c.src!.available },
        { inventoryItemId: c.v.inventoryItemId!, locationId: to, delta: c.n, changeFrom: c.dst!.available }]) : [];
   // One key per reviewed proposal; any edit mints a new one, a retry of the same proposal reuses it so Shopify dedupes.
-  const key = useMemo(() => crypto.randomUUID(), [JSON.stringify(changes), reference]); // eslint-disable-line react-hooks/exhaustive-deps
+  const key = useMemo(() => crypto.randomUUID(), [JSON.stringify(changes), reference, receiveNow, trackCompany, trackNumber]); // eslint-disable-line react-hooks/exhaustive-deps
   const units = checked.reduce((a, c) => a + c.n, 0);
   const stale = !!error?.includes("The count changed");
 
@@ -63,9 +68,17 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
     if (!valid || busyRef.current) return;
     busyRef.current = true; setBusy(true); setError(null);
     try {
-      setResult(await adjustInventory({
-        storeId, reason: mode === "receive" ? "received" : "correction", changes, idempotencyKey: key, kind: mode, reference: reference.trim() || undefined,
-      }));
+      if (mode === "receive") {
+        setResult(await adjustInventory({ storeId, reason: "received", changes, idempotencyKey: key, kind: "receive", reference: reference.trim() || undefined }));
+      } else {
+        const t = await transferInventory({
+          storeId, originLocationId: from, destinationLocationId: to, idempotencyKey: key, receiveNow, reference: reference.trim() || undefined,
+          lines: checked.map((c) => ({ inventoryItemId: c.v.inventoryItemId!, quantity: c.n })),
+          trackingCompany: receiveNow ? undefined : trackCompany.trim() || undefined, trackingNumber: receiveNow ? undefined : trackNumber.trim() || undefined,
+        });
+        setTransfer(t);
+        setResult(t.levels);
+      }
       invalidateInventory();
     } catch (e) {
       setError(String(e));
@@ -85,7 +98,7 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
           <div><div className="split-eyebrow">{storeById(storeId).label} · Inventory</div><h2 id="move-title">{title}</h2></div>
           <Pill kind="neutral" dot={false}>Writes to Shopify</Pill>
         </div>
-        <p className="split-intro">{mode === "receive" ? "Adds units to available stock at one location (reason: Received)." : "Moves units between two locations. Both sides apply together or not at all."}</p>
+        <p className="split-intro">{mode === "receive" ? "Adds units to available stock at one location (reason: Received)." : "Creates a Shopify Transfer (Products → Transfers). Move now ships and receives it at once; In transit leaves it for the destination to receive in Shopify."}</p>
       </div>
       {mode === "transfer" && locations.length < 2 ? (
         <div className="adjust-body"><p className="mute" style={{ margin: 0 }}>{storeById(storeId).label} stocks items at {locations.length ? `one location (${locations[0].name})` : "no locations"}, so there's nowhere to transfer to.</p></div>
@@ -107,6 +120,16 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
             </label>
           </div>
           {sameLoc && <div className="split-error" style={{ marginTop: 0 }}>Pick two different locations.</div>}
+          {mode === "transfer" && !result && <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div className="seg-sm dark" role="radiogroup" aria-label="Transfer type">
+              <button type="button" role="radio" aria-checked={receiveNow} className={`seg-sm-item${receiveNow ? " active" : ""}`} disabled={busy} onClick={() => setReceiveNow(true)}>Move now</button>
+              <button type="button" role="radio" aria-checked={!receiveNow} className={`seg-sm-item${!receiveNow ? " active" : ""}`} disabled={busy} onClick={() => setReceiveNow(false)}>In transit</button>
+            </div>
+            {!receiveNow && <>
+              <input className="input input-dark" style={{ width: 120 }} placeholder="Carrier" aria-label="Carrier" value={trackCompany} disabled={busy} onChange={(e) => setTrackCompany(e.target.value)} />
+              <input className="input input-dark mono" style={{ width: 200 }} placeholder="Tracking number (optional)" aria-label="Tracking number" value={trackNumber} disabled={busy} onChange={(e) => setTrackNumber(e.target.value)} />
+            </>}
+          </div>}
           {!result && <div className="stock-search">
             <input ref={searchRef} className="input input-dark" placeholder="Add an item — search product, variant or SKU" value={q} disabled={busy}
               onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && matches[0]) { e.preventDefault(); add(matches[0]); } }} />
@@ -127,12 +150,14 @@ export function StockMoveDialog({ mode, storeId, variants, onClose }: { mode: Mo
                 <td className="r"><input className="input input-dark num stock-qty" inputMode="numeric" placeholder="0" value={c.qty} disabled={busy || !!result}
                   aria-label={`Quantity for ${label(c.v)}`} onChange={(e) => setQty(c.v.id, e.target.value)} onKeyDown={(e) => e.key === "Enter" && void apply()} /></td>
                 <td className="r num">{a1 ? <strong>{a1.available}</strong> : c.src ? <>{c.src.available}{c.n > 0 && <> → <span style={{ color: mode === "receive" ? "var(--green)" : "var(--amber)" }}>{c.src.available + (mode === "receive" ? c.n : -c.n)}</span></>}</> : "—"}</td>
-                {mode === "transfer" && <td className="r num">{a2 ? <strong>{a2.available}</strong> : c.dst ? <>{c.dst.available}{c.n > 0 && <> → <span style={{ color: "var(--green)" }}>{c.dst.available + c.n}</span></>}</> : "—"}</td>}
+                {mode === "transfer" && <td className="r num">{a2 ? <strong>{a2.available}</strong> : c.dst ? <>{c.dst.available}{c.n > 0 && (receiveNow ? <> → <span style={{ color: "var(--green)" }}>{c.dst.available + c.n}</span></> : <span className="mute"> (+{c.n} incoming)</span>)}</> : "—"}</td>}
                 <td className="r">{!result && <button className="icon-btn" aria-label={`Remove ${label(c.v)}`} disabled={busy} onClick={() => setLines((ls) => ls.filter((l) => l.v.id !== c.v.id))}>×</button>}</td>
               </tr>;
             })}</tbody>
           </table>}
-          {result && <p className="mute" role="status" style={{ margin: 0, fontSize: 12 }}>Applied. Bold counts were re-read from Shopify; Inventory is refreshing.</p>}
+          {result && <p className="mute" role="status" style={{ margin: 0, fontSize: 12 }}>
+            {transfer ? <>Transfer <button className="link-btn" onClick={() => void openUrl(adminUrl(storeId, transfer.transferId))}>{transfer.name} ↗</button> {transfer.received ? "moved and received." : "is in transit — receive it in Shopify when it arrives."}{" "}</> : "Applied. "}
+            Bold counts were re-read from Shopify; Inventory is refreshing.</p>}
           {error && <div className="split-error" role="alert" style={{ marginTop: 0 }}>{error}{!stale && <div>Retrying this exact change is safe — Shopify ignores a repeat of the same request.</div>}</div>}
         </div>
       )}

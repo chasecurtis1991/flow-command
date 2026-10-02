@@ -3,7 +3,7 @@
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
 import {
   TERPENE_LIST, type CatalogProduct, type CatalogResult, type Coa, type CoaList, type Customer, type CustomersResult, type GoogleConfig, type GoogleStatus, type ImportRequest, type ImportStep,
-  type FulfillmentInfo, type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type OrdersSinceResult, type PresenceResult, type ProductHit,
+  type FulfillmentInfo, type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type PresenceResult, type ProductHit,
 } from "./shopify";
 import type { SplitPreview, SplitResult, SplitVariant } from "./variantSplit";
 
@@ -95,6 +95,39 @@ function fulfill(a: Record<string, unknown>) {
   const o = orders.find((x) => x.id === r.orderId);
   if (o) o.displayFulfillmentStatus = fo.status === "CLOSED" ? "FULFILLED" : "PARTIALLY_FULFILLED";
   return st;
+}
+
+// Browser-preview refunds: refundable quantities and a running refunded total per order (no tax in the sample).
+const refundedQty = new Map<string, Record<string, number>>(), refundedAmt = new Map<string, number>();
+function refundInfo(orderId: string) {
+  const d = detail(orderId), done = refundedQty.get(orderId) ?? {};
+  return {
+    name: d.name, currency: "USD", refunded: `${(refundedAmt.get(orderId) ?? 0).toFixed(2)} USD`,
+    lines: d.lineItems.map((li, k) => ({ id: `${orderId.replace("Order", "LineItem")}-${k}`, title: li.title, sku: li.sku, quantity: li.quantity,
+      refundable: li.quantity - (done[k] ?? 0), unfulfilled: d.displayFulfillmentStatus === "FULFILLED" ? 0 : li.quantity, unitPrice: li.price })),
+    locations: [{ id: "gid://shopify/Location/80000", name: "Warehouse" }, { id: "gid://shopify/Location/80001", name: "Retail floor" }],
+    defaultLocationId: "gid://shopify/Location/80000",
+  };
+}
+function refundPreview(a: Record<string, unknown>) {
+  const info = refundInfo(String(a.orderId)), d = detail(String(a.orderId));
+  const lines = a.lines as { lineItemId: string; quantity: number }[];
+  const sub = lines.reduce((t, l) => t + Number(info.lines.find((x) => x.id === l.lineItemId)!.unitPrice.split(" ")[0]) * l.quantity, 0);
+  const ship = a.refundShipping ? Number((d.totalShipping ?? "0 USD").split(" ")[0]) : 0;
+  return { amount: (sub + ship).toFixed(2), subtotal: sub.toFixed(2), tax: "0.00", shipping: ship.toFixed(2), currency: "USD", gateways: sub + ship > 0 ? ["shopify_payments"] : [] };
+}
+function refund(a: Record<string, unknown>) {
+  const r = a.request as { orderId: string; lines: { lineItemId: string; quantity: number }[]; refundShipping: boolean; expectedAmount: string };
+  const info = refundInfo(r.orderId);
+  for (const l of r.lines) { const x = info.lines.find((y) => y.id === l.lineItemId)!; if (l.quantity > x.refundable) throw new Error(`Only ${x.refundable} of "${x.title}" can still be refunded — it may have just been refunded. Reload the order.`); }
+  const p = refundPreview({ orderId: r.orderId, lines: r.lines, refundShipping: r.refundShipping });
+  if (Number(p.amount).toFixed(2) !== Number(r.expectedAmount).toFixed(2)) throw new Error(`The refund total changed to ${p.amount} USD since you reviewed it (was ${r.expectedAmount}). Review the new amount and confirm again.`);
+  const done = refundedQty.get(r.orderId) ?? {};
+  for (const l of r.lines) { const k = Number(l.lineItemId.split("-").pop()); done[k] = (done[k] ?? 0) + l.quantity; }
+  refundedQty.set(r.orderId, done); refundedAmt.set(r.orderId, (refundedAmt.get(r.orderId) ?? 0) + Number(p.amount));
+  const o = orders.find((x) => x.id === r.orderId);
+  if (o) o.displayFinancialStatus = refundInfo(r.orderId).lines.every((l) => l.refundable === 0) ? "REFUNDED" : "PARTIALLY_REFUNDED";
+  return p;
 }
 
 // Browser-preview note/tag edits, kept in memory (same checks as order_notes.rs).
@@ -194,10 +227,23 @@ function customers(args: Record<string, unknown>): CustomersResult {
   const first = Math.min(100, Math.max(1, Number(args.first ?? 100)));
   return { customers: rows.slice(0, first), hasNextPage: rows.length > first, totalCount: rows.length, totalPrecision: "EXACT" };
 }
-const ordersSince = (storeId: string, since: string): OrdersSinceResult => ({
-  orders: storeOrders(storeId).filter((o) => o.createdAt.slice(0, 10) >= since).map((o) => ({ createdAt: o.createdAt, total: o.totalPrice, cancelled: !!o.cancelled })),
-  truncated: false,
-});
+/** Browser-preview ShopifyQL report built from the sample orders (no tax/shipping split; ~6% discounts, a little returns). */
+function salesReport(storeId: string, days: number) {
+  const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const rows = Array.from({ length: days }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - (days - 1 - i)); return { day: key(d), orders: 0, grossSales: 0, discounts: 0, returns: 0, netSales: 0, totalSales: 0, averageOrderValue: 0 }; });
+  const at = new Map(rows.map((r, i) => [r.day, i]));
+  for (const o of storeOrders(storeId)) {
+    const i = o.cancelled ? undefined : at.get(key(new Date(o.createdAt)));
+    if (i == null) continue;
+    const t = Number(o.totalPrice.split(" ")[0]), r = rows[i];
+    r.orders += 1; r.grossSales += t; r.discounts -= t * 0.06; r.returns -= o.displayFinancialStatus?.includes("REFUNDED") ? t * 0.5 : 0;
+  }
+  for (const r of rows) { r.netSales = r.grossSales + r.discounts + r.returns; r.totalSales = r.netSales; r.averageOrderValue = r.orders ? (r.grossSales + r.discounts) / r.orders : 0; }
+  const totals = rows.reduce((t, r) => ({ ...t, orders: t.orders + r.orders, grossSales: t.grossSales + r.grossSales, discounts: t.discounts + r.discounts, returns: t.returns + r.returns, netSales: t.netSales + r.netSales, totalSales: t.totalSales + r.totalSales }), { ...rows[0], day: "", orders: 0, grossSales: 0, discounts: 0, returns: 0, netSales: 0, totalSales: 0 });
+  totals.averageOrderValue = totals.orders ? (totals.grossSales + totals.discounts) / totals.orders : 0;
+  const top = [["Sour Space Candy", 0.31], ["Lifter", 0.24], ["Hawaiian Haze", 0.17], ["Cherry Wine", 0.11], ["Pre-rolls · 2pk", 0.06]] as const;
+  return { currency: "USD", days: rows, totals, topProducts: totals.netSales > 0 ? top.map(([title, f]) => ({ title, netSales: totals.netSales * f, units: Math.max(1, Math.round(totals.orders * f * 1.4)) })) : [] };
+}
 
 // Inventory sample: [product, variant, sku, status, tracked, warehouse, retail floor, committed]
 const INV_LOCS = ["Warehouse", "Retail floor"];
@@ -243,6 +289,23 @@ function adjust(a: Record<string, unknown>) {
   });
   for (const { v, l, c } of targets) { l.available += c.delta; l.onHand += c.delta; v.available += c.delta; }
   return targets.map(({ l, c }) => ({ inventoryItemId: c.inventoryItemId, locationId: c.locationId, available: l.available, onHand: l.onHand }));
+}
+/** Browser-preview Shopify Transfer: Move now moves the units; In transit only takes them out of the origin. */
+let transferSeq = 1;
+function transfer(a: Record<string, unknown>) {
+  const r = a.request as { originLocationId: string; destinationLocationId: string; lines: { inventoryItemId: string; quantity: number }[]; receiveNow: boolean };
+  const at = (item: string, loc: string) => invVariants.find((v) => v.inventoryItemId === item)?.levels.find((l) => l.locationId === loc);
+  for (const l of r.lines) if (!at(l.inventoryItemId, r.originLocationId) || !at(l.inventoryItemId, r.destinationLocationId)) throw new Error("An item isn't stocked at one of the locations — stock it there in Shopify first.");
+  for (const l of r.lines) {
+    const v = invVariants.find((x) => x.inventoryItemId === l.inventoryItemId)!, o = at(l.inventoryItemId, r.originLocationId)!, d = at(l.inventoryItemId, r.destinationLocationId)!;
+    o.available -= l.quantity; o.onHand -= l.quantity; v.available -= l.quantity;
+    if (r.receiveNow) { d.available += l.quantity; d.onHand += l.quantity; v.available += l.quantity; }
+  }
+  const n = transferSeq++;
+  return {
+    transferId: `gid://shopify/InventoryTransfer/${n}`, name: `#T${String(n).padStart(4, "0")}`, status: r.receiveNow ? "TRANSFERRED" : "IN_PROGRESS", received: r.receiveNow,
+    levels: r.lines.flatMap((l) => [r.originLocationId, r.destinationLocationId].map((loc) => { const x = at(l.inventoryItemId, loc)!; return { inventoryItemId: l.inventoryItemId, locationId: loc, available: x.available, onHand: x.onHand }; })),
+  };
 }
 const inventory = (): InventoryResult => ({
   variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
@@ -514,7 +577,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, get_fulfillment: 300, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -533,16 +596,20 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "get_order": return detail(String(args.orderId));
     case "update_order_note_tags": return updateNoteTags(args);
     case "get_fulfillment": return fulfillmentInfo(String(args.orderId));
+    case "get_refund_info": return refundInfo(String(args.orderId));
+    case "preview_refund": return refundPreview(args);
+    case "create_refund": return refund(args);
     case "fulfill_order": return fulfill(args);
     case "list_inventory": return inventory();
     case "adjust_inventory": return adjust(args);
+    case "transfer_inventory": return transfer(args);
     case "list_products": return catalog();
     case "prepare_variant_split": return splitPreview(args);
     case "split_product_variant": return splitVariant(args);
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
-    case "list_orders_since": return ordersSince(String(args.storeId), String(args.since));
+    case "sales_report": return salesReport(String(args.storeId), Number(args.days));
     case "list_coas": return coaList();
     case "save_coa_link": return saveCoaLink(args);
     case "save_coa_fields": return saveCoaFields(args);

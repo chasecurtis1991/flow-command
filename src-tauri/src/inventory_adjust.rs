@@ -171,13 +171,18 @@ pub async fn adjust_inventory(request: AdjustRequest) -> Result<Vec<LevelAfter>,
     if resp["data"]["inventoryAdjustQuantities"]["inventoryAdjustmentGroup"].is_null() {
         return Err("Shopify returned no adjustment record — sync to check whether the change applied before retrying.".into());
     }
-    let mut ids: Vec<&str> = request.changes.iter().map(|c| c.inventory_item_id.as_str()).collect();
+    read_levels(&domain, &request.changes).await
+}
+
+/// Shopify's current available / on-hand for each change's item at its location (also used after a transfer).
+pub async fn read_levels(domain: &str, changes: &[Change]) -> Result<Vec<LevelAfter>, String> {
+    let mut ids: Vec<&str> = changes.iter().map(|c| c.inventory_item_id.as_str()).collect();
     ids.sort_unstable();
     ids.dedup();
-    let levels = crate::graphql_request(&domain, LEVELS_QUERY, Some(serde_json::json!({ "ids": ids })))
+    let levels = crate::graphql_request(domain, LEVELS_QUERY, Some(serde_json::json!({ "ids": ids })))
         .await
         .map_err(|e| format!("Change applied, but re-reading the counts failed — sync to see them. ({e})"))?;
-    levels_after(&levels, &request.changes).ok_or_else(|| "Change applied, but Shopify returned no counts — sync to see them.".into())
+    levels_after(&levels, changes).ok_or_else(|| "Change applied, but Shopify returned no counts — sync to see them.".into())
 }
 
 #[cfg(test)]
