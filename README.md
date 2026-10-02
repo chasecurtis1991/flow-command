@@ -160,10 +160,14 @@ the 100 shown); the toolbar count says `Showing 100 of 4,213 · search to narrow
 filters, sort and **Columns** work like the other tables; **Sync now** refetches. Needs `read_customers`.
 
 ### Analytics
-Orders per day and per-store Orders / Revenue / Avg order for the last **7 / 14 / 30** days, derived from each
-store's orders (`list_orders_since`, all three stores fetched in parallel; cancelled and test orders excluded). No
-ShopifyQL, so no `read_reports` scope is needed. Days are bucketed in the Mac's local time. A store that can't be
-reached shows **Unreachable** with its own Retry. The inventory-drift chart is still sample data (FGINV has no backend).
+Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
+match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and
+Avg order** for the last **7 / 14 / 30 / 90** days, an **Orders per day** chart summed across stores (days in each
+shop's own timezone), and **Top products by net sales** across stores. One request per store
+(`FROM sales SHOW orders, gross_sales, discounts, sales_reversals, net_sales, total_sales, average_order_value
+TIMESERIES day WITH TOTALS …` plus a `GROUP BY product_title … LIMIT 5`), all three in parallel; a store that fails
+shows **Unreachable** with the reason and its own Retry. No order cap (the old orders-derived version stopped at
+2,000). The inventory-drift chart is still sample data (FGINV has no backend).
 
 ### Catalog: Visible in, Open in Shopify
 **Visible in** shows a chip for every store where the product is active. The active store answers from the product

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+mod analytics_report;
 mod inventory_adjust;
 mod inventory_transfer;
 mod order_fulfill;
@@ -271,24 +272,6 @@ pub struct ProductPresence {
 #[serde(rename_all = "camelCase")]
 pub struct PresenceResult {
     pub products: Vec<ProductPresence>,
-    /// True when the page cap was hit with more pages remaining.
-    pub truncated: bool,
-}
-
-/// Minimal order for Analytics day buckets; test orders are dropped before this is built.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OrderStub {
-    pub created_at: String,
-    /// currentTotalPriceSet.shopMoney as "128.00 USD" (same shape as Order.total_price); empty if missing.
-    pub total: String,
-    pub cancelled: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OrdersSinceResult {
-    pub orders: Vec<OrderStub>,
     /// True when the page cap was hit with more pages remaining.
     pub truncated: bool,
 }
@@ -1309,82 +1292,12 @@ async fn list_product_presence(store_id: String) -> Result<PresenceResult, Strin
     Ok(PresenceResult { products, truncated: true })
 }
 
-// Each stub node is ~3 points (Order + MoneyBag + MoneyV2), so a 200-row page is 2 + 200×3 = 602 —
-// under the 1,000-point cap; 10 pages = 2,000 orders before `truncated`.
-const ORDERS_SINCE_PAGE_CAP: usize = 10;
-
-const ORDERS_SINCE_QUERY: &str = r#"
-query OrdersSince($after: String, $query: String) {
-    orders(first: 200, after: $after, query: $query, sortKey: CREATED_AT, reverse: true) {
-        pageInfo { hasNextPage endCursor }
-        edges {
-            node {
-                id
-                createdAt
-                cancelledAt
-                test
-                currentTotalPriceSet { shopMoney { amount currencyCode } }
-            }
-        }
-    }
-}
-"#;
-
-/// Drops test orders (Bogus Gateway etc.) so Analytics never counts them.
-fn parse_order_stubs(page: &serde_json::Value) -> Vec<OrderStub> {
-    page["data"]["orders"]["edges"]
-        .as_array()
-        .map(|edges| {
-            edges
-                .iter()
-                .filter_map(|edge| {
-                    let node = &edge["node"];
-                    if node["test"].as_bool().unwrap_or(false) {
-                        return None;
-                    }
-                    Some(OrderStub {
-                        created_at: node["createdAt"].as_str()?.to_string(),
-                        total: money(&node["currentTotalPriceSet"]["shopMoney"]),
-                        cancelled: !node["cancelledAt"].is_null(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// Exactly "YYYY-MM-DD": ten ASCII chars, digits everywhere but the two dashes.
 fn is_ymd(s: &str) -> bool {
     s.len() == 10
         && s.bytes()
             .enumerate()
             .all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() })
-}
-
-// Every non-test order created on or after `since` (YYYY-MM-DD) in the given store. Analytics buckets
-// these by day client-side rather than via ShopifyQL, which would need a read_reports scope.
-#[tauri::command]
-async fn list_orders_since(store_id: String, since: String) -> Result<OrdersSinceResult, String> {
-    if !is_ymd(&since) {
-        return Err("since must be YYYY-MM-DD".to_string());
-    }
-    let shop_domain = store_by_id(&store_id)?.domain;
-    let query = format!("created_at:>={since}");
-    let mut orders = Vec::new();
-    let mut after: Option<String> = None;
-    for _ in 0..ORDERS_SINCE_PAGE_CAP {
-        let variables = serde_json::json!({ "after": after, "query": query });
-        let result = graphql_request(&shop_domain, ORDERS_SINCE_QUERY, Some(variables))
-            .await
-            .map_err(|e| scope_denied(e, &shop_domain, "read_orders", "order"))?;
-        orders.extend(parse_order_stubs(&result));
-        let info = &result["data"]["orders"]["pageInfo"];
-        match info["endCursor"].as_str() {
-            Some(c) if info["hasNextPage"].as_bool().unwrap_or(false) => after = Some(c.to_string()),
-            _ => return Ok(OrdersSinceResult { orders, truncated: false }),
-        }
-    }
-    Ok(OrdersSinceResult { orders, truncated: true })
 }
 
 // ---- COAs (retail store only) ----------------------------------------------------------------
@@ -4274,7 +4187,7 @@ pub fn run() {
             variant_split::release_variant_split,
             list_customers,
             list_product_presence,
-            list_orders_since,
+            analytics_report::sales_report,
             list_coas,
             save_coa_link,
             save_coa_fields,
@@ -4550,26 +4463,6 @@ mod tests {
         assert_eq!(p[1].status, "DRAFT");
 
         assert!(parse_presence(&serde_json::json!({"data": {"products": null}})).is_empty());
-    }
-
-    #[test]
-    fn parse_order_stubs_drops_test_orders() {
-        let page = serde_json::json!({"data": {"orders": {"pageInfo": {"hasNextPage": false}, "edges": [
-            {"node": {"id": "gid://shopify/Order/1", "createdAt": "2026-09-12T09:41:00Z", "cancelledAt": null, "test": false,
-                      "currentTotalPriceSet": {"shopMoney": {"amount": "128.0", "currencyCode": "USD"}}}},
-            {"node": {"id": "gid://shopify/Order/2", "createdAt": "2026-09-11T06:00:00Z", "cancelledAt": "2026-09-11T07:00:00Z", "test": false,
-                      "currentTotalPriceSet": {"shopMoney": {"amount": "0.0", "currencyCode": "USD"}}}},
-            {"node": {"id": "gid://shopify/Order/3", "createdAt": "2026-09-10T00:00:00Z", "cancelledAt": null, "test": true,
-                      "currentTotalPriceSet": {"shopMoney": {"amount": "999.0", "currencyCode": "USD"}}}}
-        ]}}});
-
-        let o = parse_order_stubs(&page);
-        assert_eq!(o.len(), 2);
-        assert_eq!(o[0].created_at, "2026-09-12T09:41:00Z");
-        assert_eq!(o[0].total, "128.0 USD");
-        assert!(!o[0].cancelled);
-        assert_eq!(o[1].total, "0.0 USD");
-        assert!(o[1].cancelled);
     }
 
     #[test]

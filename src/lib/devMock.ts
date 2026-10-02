@@ -3,7 +3,7 @@
 // Never loaded inside the real app — main.tsx only imports this when __TAURI_INTERNALS__ is absent.
 import {
   TERPENE_LIST, type CatalogProduct, type CatalogResult, type Coa, type CoaList, type Customer, type CustomersResult, type GoogleConfig, type GoogleStatus, type ImportRequest, type ImportStep,
-  type FulfillmentInfo, type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type OrdersSinceResult, type PresenceResult, type ProductHit,
+  type FulfillmentInfo, type InventoryResult, type InventoryVariant, type MirrorResult, type Order, type OrderDetail, type OrdersPage, type PresenceResult, type ProductHit,
 } from "./shopify";
 import type { SplitPreview, SplitResult, SplitVariant } from "./variantSplit";
 
@@ -227,10 +227,23 @@ function customers(args: Record<string, unknown>): CustomersResult {
   const first = Math.min(100, Math.max(1, Number(args.first ?? 100)));
   return { customers: rows.slice(0, first), hasNextPage: rows.length > first, totalCount: rows.length, totalPrecision: "EXACT" };
 }
-const ordersSince = (storeId: string, since: string): OrdersSinceResult => ({
-  orders: storeOrders(storeId).filter((o) => o.createdAt.slice(0, 10) >= since).map((o) => ({ createdAt: o.createdAt, total: o.totalPrice, cancelled: !!o.cancelled })),
-  truncated: false,
-});
+/** Browser-preview ShopifyQL report built from the sample orders (no tax/shipping split; ~6% discounts, a little returns). */
+function salesReport(storeId: string, days: number) {
+  const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const rows = Array.from({ length: days }, (_, i) => { const d = new Date(); d.setDate(d.getDate() - (days - 1 - i)); return { day: key(d), orders: 0, grossSales: 0, discounts: 0, returns: 0, netSales: 0, totalSales: 0, averageOrderValue: 0 }; });
+  const at = new Map(rows.map((r, i) => [r.day, i]));
+  for (const o of storeOrders(storeId)) {
+    const i = o.cancelled ? undefined : at.get(key(new Date(o.createdAt)));
+    if (i == null) continue;
+    const t = Number(o.totalPrice.split(" ")[0]), r = rows[i];
+    r.orders += 1; r.grossSales += t; r.discounts -= t * 0.06; r.returns -= o.displayFinancialStatus?.includes("REFUNDED") ? t * 0.5 : 0;
+  }
+  for (const r of rows) { r.netSales = r.grossSales + r.discounts + r.returns; r.totalSales = r.netSales; r.averageOrderValue = r.orders ? (r.grossSales + r.discounts) / r.orders : 0; }
+  const totals = rows.reduce((t, r) => ({ ...t, orders: t.orders + r.orders, grossSales: t.grossSales + r.grossSales, discounts: t.discounts + r.discounts, returns: t.returns + r.returns, netSales: t.netSales + r.netSales, totalSales: t.totalSales + r.totalSales }), { ...rows[0], day: "", orders: 0, grossSales: 0, discounts: 0, returns: 0, netSales: 0, totalSales: 0 });
+  totals.averageOrderValue = totals.orders ? (totals.grossSales + totals.discounts) / totals.orders : 0;
+  const top = [["Sour Space Candy", 0.31], ["Lifter", 0.24], ["Hawaiian Haze", 0.17], ["Cherry Wine", 0.11], ["Pre-rolls · 2pk", 0.06]] as const;
+  return { currency: "USD", days: rows, totals, topProducts: totals.netSales > 0 ? top.map(([title, f]) => ({ title, netSales: totals.netSales * f, units: Math.max(1, Math.round(totals.orders * f * 1.4)) })) : [] };
+}
 
 // Inventory sample: [product, variant, sku, status, tracked, warehouse, retail floor, committed]
 const INV_LOCS = ["Warehouse", "Retail floor"];
@@ -564,7 +577,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -596,7 +609,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
-    case "list_orders_since": return ordersSince(String(args.storeId), String(args.since));
+    case "sales_report": return salesReport(String(args.storeId), Number(args.days));
     case "list_coas": return coaList();
     case "save_coa_link": return saveCoaLink(args);
     case "save_coa_fields": return saveCoaFields(args);
