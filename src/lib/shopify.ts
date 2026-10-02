@@ -524,6 +524,37 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   return hit?.status ?? null;
 }
 
+// ---- product detail (mirrors product_detail.rs) ----
+export interface ProductVariantDetail { id: string; title: string; sku: string | null; barcode: string | null; price: string; compareAtPrice: string | null; inventory: number; tracked: boolean }
+export interface ProductDetail {
+  id: string; title: string; handle: string; status: string; vendor: string | null; productType: string | null; tags: string[]; description: string | null;
+  createdAt: string; updatedAt: string; onlineStoreUrl: string | null; images: string[]; variants: ProductVariantDetail[];
+}
+export interface StoreCopy { storeId: StoreId; state: "found" | "missing" | "error"; productId: string | null; status: string | null; matchedBy: "handle" | "title" | null; variants: ProductVariantDetail[]; error: string | null }
+export const getProductDetail = (storeId: StoreId, productId: string) => invoke<{ product: ProductDetail; copies: StoreCopy[] }>("get_product_detail", { storeId, productId });
+/** The matching variant in another store's copy: same SKU, else same variant title. */
+export const matchVariant = (v: ProductVariantDetail, copy: StoreCopy) =>
+  copy.variants.find((x) => !!v.sku && x.sku?.toLowerCase() === v.sku.toLowerCase()) ?? copy.variants.find((x) => x.title.toLowerCase() === v.title.toLowerCase());
+
+// ---- customer detail (mirrors customer_detail.rs) ----
+export interface CustomerOrder { id: string; name: string; createdAt: string; financialStatus: string | null; fulfillmentStatus: string | null; cancelled: boolean; total: string }
+export interface CustomerDetail {
+  id: string; displayName: string; email: string | null; phone: string | null; createdAt: string; note: string | null; tags: string[];
+  state: string | null; verifiedEmail: boolean; taxExempt: boolean; ordersCount: number; amountSpent: string; address: string | null;
+  emailMarketing: string | null; smsMarketing: string | null; companies: string[]; recentOrders: CustomerOrder[];
+}
+export const getCustomer = (storeId: StoreId, customerId: string) => invoke<CustomerDetail>("get_customer", { storeId, customerId });
+
+// ---- activity (mirrors activity.rs: Shopify's event log, filtered to what's worth a glance) ----
+export interface Activity { id: string; createdAt: string; message: string; action: string | null; subjectType: string | null; subjectId: string | null }
+export type StoreActivity = Activity & { store: StoreId };
+/** Latest events from every store, newest first. A store that fails is reported in `failed` instead of failing the feed. */
+export async function loadActivity(perStore = 15): Promise<{ items: StoreActivity[]; failed: StoreId[] }> {
+  const res = await Promise.allSettled(STORES.map((s) => invoke<Activity[]>("list_activity", { storeId: s.id, first: perStore })));
+  const items = res.flatMap((r, i) => (r.status === "fulfilled" ? r.value.map((a) => ({ ...a, store: STORES[i].id })) : []));
+  return { items: items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)), failed: STORES.filter((_, i) => res[i].status === "rejected").map((s) => s.id) };
+}
+
 // ---- analytics (Shopify's own reports via ShopifyQL; mirrors analytics_report.rs, needs read_reports) ----
 export interface SalesRow { day: string; orders: number; grossSales: number; discounts: number; returns: number; netSales: number; totalSales: number; averageOrderValue: number }
 export interface ProductSales { title: string; netSales: number; units: number } // units −1 when the ShopifyQL version has no net_items_sold

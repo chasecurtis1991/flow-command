@@ -6,12 +6,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+mod activity;
 mod analytics_report;
+mod customer_detail;
 mod inventory_adjust;
 mod inventory_transfer;
 mod order_fulfill;
 mod order_notes;
 mod order_refund;
+mod product_detail;
 mod variant_split;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
@@ -4188,6 +4191,9 @@ pub fn run() {
             list_customers,
             list_product_presence,
             analytics_report::sales_report,
+            activity::list_activity,
+            customer_detail::get_customer,
+            product_detail::get_product_detail,
             list_coas,
             save_coa_link,
             save_coa_fields,

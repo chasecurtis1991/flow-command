@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useApp } from "../lib/app";
 import {
@@ -8,6 +8,7 @@ import {
 import { type ColumnDef, useDebounced, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterChips, TableHead, TableRow } from "../components/DataTable";
+import { CustomerDetailPanel } from "./CustomerDetailPanel";
 
 const nf = new Intl.NumberFormat("en-US");
 const initials = (name: string) => name.split(/\s+/).slice(0, 2).map((w) => w[0] ?? "").join("").toUpperCase();
@@ -42,6 +43,19 @@ export function Customers() {
   const { store, storeReady, toast } = useApp();
   const cust = useCustomers();
   const [q, setQ] = useState("");
+  // Selected customer lives in ?sel=<gid>; the detail panel opens beside the list and closes with × or Esc.
+  const [params, setParams] = useSearchParams();
+  const selected = params.get("sel");
+  const select = (id: string | null) => setParams(id ? { sel: id } : {}, { replace: true });
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("dialog[open]")) select(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A store switch makes the selection meaningless.
+  const [selStore, setSelStore] = useState(store);
+  useEffect(() => { if (store !== selStore) { setSelStore(store); select(null); } }, [store]); // eslint-disable-line react-hooks/exhaustive-deps
   // Search runs in Shopify (the list is the top 100 of possibly thousands); column filters and sort then apply on top.
   const query = buildCustomersQuery(useDebounced(q, 300));
 
@@ -95,12 +109,14 @@ export function Customers() {
   );
   else body = (
     <div className={`scroll${loading ? " rows-dim" : ""}`} aria-busy={loading}>
-      {rows.map((c) => <TableRow key={c.id} table={table} row={c} className="tall" />)}
+      {rows.map((c) => <TableRow key={c.id} table={table} row={c} className={`tall clickable${c.id === selected ? " selected" : ""}`} onClick={() => select(c.id === selected ? null : c.id)} />)}
     </div>
   );
 
   return (
     <section className="screen screen-full">
+      <div className={selected ? "orders" : "cust-full"}>
+      <div className="orders-list">
       <div className="toolbar" style={{ flexWrap: "wrap" }}>
         <input className="input" style={{ width: 300 }} placeholder="Search by name, email, company or phone" value={q} onChange={(e) => setQ(e.target.value)} />
         <FilterChips table={table} />
@@ -112,6 +128,9 @@ export function Customers() {
       </div>
       <TableHead table={table} />
       {body}
+      </div>
+      {selected && <CustomerDetailPanel store={store} id={selected} onClose={() => select(null)} />}
+      </div>
     </section>
   );
 }

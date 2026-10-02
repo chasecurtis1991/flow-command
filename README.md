@@ -159,6 +159,20 @@ location and last order. The search box runs in Shopify (relevance-ranked, so it
 the 100 shown); the toolbar count says `Showing 100 of 4,213 · search to narrow` when there are more. Column
 filters, sort and **Columns** work like the other tables; **Sync now** refetches. Needs `read_customers`.
 
+### Home: recent activity
+Shopify's own event log from all three stores, newest first: new orders, fulfillments, refunds, cancellations,
+payment/refund/fulfillment failures, restocks, products created / deleted / published, new customers and staff
+comments (an allow-list in `activity.rs` — one order logs ~8 events, most of them bookkeeping). The dot is green for
+new orders / fulfilled / published, amber for refunds / restocks / removals, red for failures / cancellations.
+Click a row: the active store's orders open in Orders, everything else opens in Shopify admin. **Refresh** reloads;
+a store that can't be reached is named under the feed.
+
+### Customers: detail panel
+Click a customer to open their detail beside the list (the selection is in the URL as `?sel=`; × or Esc closes it,
+switching store clears it): orders / lifetime spend / average order, email (click to mail) and phone with marketing
+consent, default address, B2B company, tags and note, and their 10 most recent orders with payment / fulfillment
+status. A recent order opens in Orders when it's among the loaded recent orders, otherwise in Shopify admin.
+
 ### Analytics
 Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
 match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and
@@ -176,6 +190,14 @@ by title (a heuristic until the stores share a SKU or metafield key). Hover a ce
 (`Active in Retail · Draft in B2B · Not listed in Bulk`); the header funnel filters on store names. The **↗** at
 the end of Catalog and Customers rows (and on grid cards) opens the product or customer in Shopify admin; the
 Orders detail panel has the same button.
+
+### Catalog: product detail panel
+Click a product (table row or grid card) to open its detail beside the list (`?sel=`; × or Esc closes it): photos,
+type / vendor / status, description, handle, tags, and a **variants × stores** table — each variant's price in Retail,
+B2B and Bulk side by side plus the active store's stock. The other stores' copies are found by handle, then exact
+title (same heuristic as *Visible in*); variants are matched by SKU, then name; `—` means not listed / no matching
+variant, `*` means the copy isn't active there. Buttons open the product in Shopify (and the other stores' copies)
+and on the online store.
 
 ### Catalog: Split variants into draft products
 In Catalog's table or grid, choose **Split variants** on a product, review the names, prices, SKUs and destination

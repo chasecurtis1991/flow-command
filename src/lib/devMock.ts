@@ -227,6 +227,48 @@ function customers(args: Record<string, unknown>): CustomersResult {
   const first = Math.min(100, Math.max(1, Number(args.first ?? 100)));
   return { customers: rows.slice(0, first), hasNextPage: rows.length > first, totalCount: rows.length, totalPrecision: "EXACT" };
 }
+/** Browser-preview product detail: the catalog sample, its inventory variants, and copies in the other stores (B2B at ~55% of retail). */
+function productDetail(storeId: string, id: string) {
+  const p = catProducts.find((x) => x.id === id);
+  if (!p) throw new Error("Product not found.");
+  const inv = invVariants.filter((v) => v.productTitle === p.title);
+  const sizes = inv.length ? inv.map((v) => ({ title: v.variantTitle ?? "Default Title", sku: v.sku, inventory: v.available, tracked: v.tracked })) : [{ title: "Default Title", sku: null, inventory: p.totalInventory, tracked: p.tracksInventory }];
+  const base = Number(p.minPrice.split(" ")[0]) || 20;
+  const vars = (factor: number, prefix: string) => sizes.map((x, i) => ({ id: `gid://shopify/ProductVariant/${prefix}${i}`, title: x.title, sku: x.sku, barcode: null, price: (base * factor * (1 + i * 0.8)).toFixed(2), compareAtPrice: null, inventory: x.inventory, tracked: x.tracked }));
+  const LETTER: Record<string, string> = { retail: "r", b2b: "b", bulk: "u" };
+  return {
+    product: { id, title: p.title, handle: p.title.toLowerCase().replace(/\W+/g, "-"), status: p.status, vendor: p.vendor, productType: p.productType, tags: p.tags,
+      description: `${p.title} — small-batch hemp flower grown in North Carolina. Hand-trimmed, slow-cured.`, createdAt: "2025-04-02T12:00:00Z", updatedAt: p.updatedAt,
+      onlineStoreUrl: p.status === "ACTIVE" ? `https://flowgardens.com/products/${p.title.toLowerCase().replace(/\W+/g, "-")}` : null, images: p.imageUrl ? [p.imageUrl] : [], variants: vars(1, "9") },
+    copies: STORES.filter((st) => st.id !== storeId).map((st) => p.stores.includes(LETTER[st.id])
+      ? { storeId: st.id, state: "found", productId: `${id}-${st.id}`, status: "ACTIVE", matchedBy: "handle", variants: vars(st.id === "b2b" ? 0.55 : 0.4, st.id === "b2b" ? "7" : "8"), error: null }
+      : { storeId: st.id, state: "missing", productId: null, status: null, matchedBy: null, variants: [], error: null }),
+  };
+}
+/** Browser-preview customer detail, built from the sample customers and their orders. */
+function customerDetail(id: string) {
+  const c = customers({ first: 100 }).customers.find((x) => x.id === id);
+  if (!c) throw new Error("Customer not found.");
+  const mine = orders.filter((o) => o.customerName === c.displayName).slice(0, 10);
+  return {
+    id, displayName: c.displayName, email: c.email, phone: c.phone ?? "+1 503 555 0142", createdAt: "2025-03-14T15:00:00Z", note: mine.length > 3 ? "Prefers discreet packaging." : null,
+    tags: c.tags.length ? c.tags : mine.length > 3 ? ["vip"] : [], state: "ENABLED", verifiedEmail: true, taxExempt: !!c.company, ordersCount: c.ordersCount, amountSpent: c.amountSpent,
+    address: c.location ? `2214 Alder St\n${c.location} 97214\nUnited States` : null, emailMarketing: mine.length % 2 ? "SUBSCRIBED" : "NOT_SUBSCRIBED", smsMarketing: null,
+    companies: c.company ? [c.company] : [],
+    recentOrders: mine.map((o) => ({ id: o.id, name: o.name, createdAt: o.createdAt, financialStatus: o.displayFinancialStatus, fulfillmentStatus: o.displayFulfillmentStatus, cancelled: !!o.cancelled, total: o.totalPrice })),
+  };
+}
+/** Browser-preview activity: a few events per sample order (new order, fulfilled, refunded) plus a product and a customer. */
+function activityFeed(storeId: string, first: number) {
+  const out = storeOrders(storeId).slice(0, 10).flatMap((o, i) => {
+    const ev = [{ id: `${o.id}-c`, createdAt: o.createdAt, message: `Received new order ${o.name.replace("#", "")} by ${o.customerName ?? "a customer"}.`, action: "confirmed", subjectType: "ORDER", subjectId: o.id }];
+    if (o.displayFulfillmentStatus === "FULFILLED") ev.push({ id: `${o.id}-f`, createdAt: new Date(Date.parse(o.createdAt) + 3_600_000).toISOString(), message: "Fulfilled 1 item via ShipStation.", action: "fulfillment_success", subjectType: "ORDER", subjectId: o.id });
+    if (o.displayFinancialStatus?.includes("REFUNDED")) ev.push({ id: `${o.id}-r`, createdAt: new Date(Date.parse(o.createdAt) + 7_200_000).toISOString(), message: `Refunded ${o.name}.`, action: "refund_success", subjectType: "ORDER", subjectId: o.id });
+    if (i === 2) ev.push({ id: `${o.id}-p`, createdAt: new Date(Date.parse(o.createdAt) - 1_800_000).toISOString(), message: "Product was created: Cherry Wine · 14g.", action: "create", subjectType: "PRODUCT", subjectId: "gid://shopify/Product/60005" });
+    return ev;
+  });
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, first);
+}
 /** Browser-preview ShopifyQL report built from the sample orders (no tax/shipping split; ~6% discounts, a little returns). */
 function salesReport(storeId: string, days: number) {
   const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -577,7 +619,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_activity: 400, get_customer: 350, get_product_detail: 450, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -609,6 +651,9 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
+    case "get_product_detail": return productDetail(String(args.storeId), String(args.productId));
+    case "get_customer": return customerDetail(String(args.customerId));
+    case "list_activity": return activityFeed(String(args.storeId), Number(args.first ?? 25));
     case "sales_report": return salesReport(String(args.storeId), Number(args.days));
     case "list_coas": return coaList();
     case "save_coa_link": return saveCoaLink(args);

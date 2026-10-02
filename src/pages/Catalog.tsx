@@ -10,6 +10,7 @@ import { type ColumnDef, useTable } from "../lib/table";
 import { EmptyState, ErrorState, LoadingState, Pill } from "../components/ui";
 import { ColumnsMenu, FilterButton, FilterChips, TableHead, TableRow } from "../components/DataTable";
 import { VariantSplitDialog } from "./VariantSplitDialog";
+import { ProductDetailPanel } from "./ProductDetailPanel";
 
 const storeChipLabel: Record<StoreId, string> = { retail: "R", b2b: "B2B", bulk: "Bulk" };
 const STATUS_OPTIONS = ["ACTIVE", "DRAFT", "ARCHIVED"].map((v) => ({ value: v, label: productStatus(v).label }));
@@ -62,7 +63,7 @@ function catalogColumns(store: StoreId, typeOptions: { value: string; label: str
     { id: "price", label: "From", width: "110px", align: "right", sortValue: (p) => moneyNum(p.minPrice), sortDir: "desc", cell: (p) => <span title={priceRange(p)}>{money(p.minPrice)}</span> },
     { id: "inventory", label: "Inventory", width: "90px", align: "right", defaultHidden: true, sortValue: (p) => (p.tracksInventory ? p.totalInventory : null), sortDir: "desc", cell: (p) => (p.tracksInventory ? p.totalInventory : "—") },
     { id: "vendor", label: "Vendor", width: "120px", defaultHidden: true, cellClass: "sub ellip", sortValue: (p) => p.vendor, filter: { kind: "text", value: (p) => p.vendor ?? "" }, cell: (p) => p.vendor ?? "—" },
-    { id: "split", label: "", title: "Split variants", width: "112px", hideable: false, cell: (p) => p.variantCount > 1 && <button className="btn btn-control" onClick={() => split(p)}>Split variants</button> },
+    { id: "split", label: "", title: "Split variants", width: "112px", hideable: false, cell: (p) => p.variantCount > 1 && <button className="btn btn-control" onClick={(e) => { e.stopPropagation(); split(p); }}>Split variants</button> },
     { id: "open", label: "", title: "Open in Shopify", width: "32px", hideable: false, cell: (p) => openBtn(store, p.id) },
   ];
 }
@@ -75,6 +76,18 @@ export function Catalog() {
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState(() => params.get("q") ?? "");
   const [splitTarget, setSplitTarget] = useState<{ product: CatalogProduct; storeId: StoreId } | null>(null);
+  // Selected product lives in ?sel=<gid>; its detail panel opens beside the list/grid (× or Esc closes it).
+  const selected = params.get("sel");
+  const select = (id: string | null) => setParams(id ? { sel: id } : {}, { replace: true });
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !document.querySelector("dialog[open]")) select(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [selStore, setSelStore] = useState(store);
+  useEffect(() => { if (store !== selStore) { setSelStore(store); select(null); } }, [store]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = (id: string) => select(id === selected ? null : id);
   const [view, setView] = useState<"table" | "grid">(() => (params.get("view") === "grid" ? "grid" : "table")); // ?view=grid deep link
 
   useEffect(() => {
@@ -143,7 +156,7 @@ export function Catalog() {
   );
   else if (view === "table") body = (
     <div className="scroll">
-      {rows.map((p) => <TableRow key={p.id} table={table} row={p} className="tall" />)}
+      {rows.map((p) => <TableRow key={p.id} table={table} row={p} className={`tall clickable${p.id === selected ? " selected" : ""}`} onClick={() => toggle(p.id)} />)}
     </div>
   );
   else body = (
@@ -151,7 +164,8 @@ export function Catalog() {
       {rows.map((p) => {
         const st = productStatus(p.status);
         return (
-          <div key={p.id} className="card product-card">
+          <div key={p.id} className={`card product-card clickable${p.id === selected ? " selected" : ""}`} role="button" tabIndex={0}
+            onClick={() => toggle(p.id)} onKeyDown={(e) => e.key === "Enter" && e.target === e.currentTarget && toggle(p.id)}>
             <div className="product-photo" style={art(p)}>{!p.imageUrl && "no photo"}</div>
             <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 4 }}>
               <div className="ellip" style={{ fontWeight: 500 }} title={p.title}>{p.title}</div>
@@ -163,7 +177,7 @@ export function Catalog() {
                   {openBtn(store, p.id)}
                 </span>
               </div>
-              {p.variantCount > 1 && <button className="btn btn-control" style={{ marginTop: 8 }} onClick={() => split(p)}>Split variants</button>}
+              {p.variantCount > 1 && <button className="btn btn-control" style={{ marginTop: 8 }} onClick={(e) => { e.stopPropagation(); split(p); }}>Split variants</button>}
             </div>
           </div>
         );
@@ -173,6 +187,8 @@ export function Catalog() {
 
   return (
     <section className="screen screen-full">
+      <div className={selected ? "orders" : "cust-full"}>
+      <div className="orders-list">
       <div className="toolbar" style={{ flexWrap: "wrap" }}>
         <input className="input" style={{ width: 240 }} placeholder="Search products, types or tags" value={q} onChange={(e) => setQ(e.target.value)} />
         <FilterButton table={table} column="status" />
@@ -194,6 +210,9 @@ export function Catalog() {
 
       {view === "table" && <TableHead table={table} />}
       {body}
+      </div>
+      {selected && <ProductDetailPanel store={store} id={selected} onClose={() => select(null)} />}
+      </div>
       {splitTarget && <VariantSplitDialog product={splitTarget.product} storeId={splitTarget.storeId} onClose={() => setSplitTarget(null)} />}
     </section>
   );
