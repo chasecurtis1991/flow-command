@@ -7,7 +7,7 @@ import {
   type VoiceStatus,
 } from "../lib/shopify";
 import { Pill } from "../components/ui";
-import { type NewProposal, type Proposal, type ToolContext, makeTools } from "./tools";
+import { type NewProposal, type Proposal, type ToolContext, clearToolCache, makeTools, preloadInventory } from "./tools";
 
 type Msg = { id: string; at: number; role: "user" | "agent"; text: string };
 const reasonLabel = (r: string) => ADJUST_REASONS.find(([v]) => v === r)?.[1] ?? r;
@@ -39,6 +39,7 @@ export function AssistantPanel({ open, onClose }: { open: boolean; onClose: () =
     onMessage: (m) => { if (m.message?.trim()) push(m.role === "user" ? "user" : "agent", m.message); },
     onError: (msg) => setError(typeof msg === "string" ? msg : String(msg)),
     onConnect: () => {
+      preloadInventory(ctx.current.store); // the first stock question then answers from memory
       if (pendingText.current) { const t = pendingText.current; pendingText.current = null; window.setTimeout(() => conv.sendUserMessage(t), 150); }
     },
     onDisconnect: () => { setSession(null); setStarting(null); },
@@ -101,6 +102,7 @@ export function AssistantPanel({ open, onClose }: { open: boolean; onClose: () =
         });
         const result = `Applied: ${p.label} at ${p.location} now ${after.available} available (${after.onHand} on hand).`;
         patch(p.id, { status: "applied", result });
+        clearToolCache();
         invalidateInventory();
         tell(`The user applied review card ${p.id.slice(0, 4)}. ${result}`);
       } else {

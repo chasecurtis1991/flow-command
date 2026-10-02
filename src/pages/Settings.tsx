@@ -288,7 +288,7 @@ function VoiceSettings({ toast }: { toast: (m: string) => void }) {
         <div className="list-row">
           <span className="two-line">
             <span>Agent</span>
-            <span className="second">{st.agentId ? `${st.voiceName ?? "Custom voice"} · ${st.needsUpdate ? "update available" : "ready"} · ${st.agentId}` : "Not set up yet — creates a private “Flow Command” agent and its tools in your ElevenLabs workspace"}</span>
+            <span className="second">{st.agentId ? `${st.voiceName ?? "Custom voice"} · ${st.llm ?? "default model"} · ${st.needsUpdate ? "update available — click Update agent for faster replies" : "ready"}` : "Not set up yet — creates a private “Flow Command” agent and its tools in your ElevenLabs workspace"}</span>
           </span>
           <button className="btn btn-primary btn-sm" disabled={!voice || !!busy} onClick={setup}>
             {busy === "setup" ? "Setting up…" : !st.agentId ? "Set up agent" : st.needsUpdate || voice !== st.voiceId ? "Update agent" : "Re-apply"}

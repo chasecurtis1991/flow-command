@@ -652,7 +652,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
     // Voice: the preview can't reach ElevenLabs; pretend it's set up so the panel and tools can be reviewed.
-    case "voice_status": return { hasKey: true, keyHint: "…mock", agentId: "agent_mock", voiceId: "v1", voiceName: "Preview voice", needsUpdate: false };
+    case "voice_status": return { hasKey: true, keyHint: "…mock", agentId: "agent_mock", voiceId: "v1", voiceName: "Preview voice", llm: "gemini-2.5-flash-lite", needsUpdate: false };
     case "list_voices": return [{ id: "v1", name: "Preview voice", category: "cloned" }, { id: "v2", name: "Rachel", category: "premade" }];
     case "save_elevenlabs_key": return "ElevenLabs key saved (browser mock — nothing stored)";
     case "setup_voice_agent": return { agentId: "agent_mock", voiceId: args.voiceId };

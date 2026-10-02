@@ -19,6 +19,9 @@ pub struct VoiceConfig {
     pub agent_id: Option<String>,
     pub voice_id: Option<String>,
     pub voice_name: Option<String>,
+    /// LLM chosen at setup (fastest available from FAST_LLMS); None = ElevenLabs' default.
+    #[serde(default)]
+    pub llm: Option<String>,
     /// client tool name → ElevenLabs workspace tool id
     #[serde(default)]
     pub tool_ids: BTreeMap<String, String>,
@@ -27,8 +30,13 @@ pub struct VoiceConfig {
     pub setup_version: u32,
 }
 
-/// Increment when PROMPT or tool_defs() change.
-const SETUP_VERSION: u32 = 1;
+/// Increment when PROMPT, tool_defs() or the agent's model settings change.
+const SETUP_VERSION: u32 = 2;
+/// Lowest-latency TTS model for English agents.
+const TTS_MODEL: &str = "eleven_flash_v2";
+/// Fast tool-capable LLMs, best first; setup uses the first one ElevenLabs lists for this workspace (GET /v1/llm).
+/// ponytail: fixed preference list; revisit when ElevenLabs adds faster models.
+const FAST_LLMS: &[&str] = &["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gpt-4.1-nano", "gemini-2.0-flash", "gpt-4o-mini", "gemini-2.5-flash"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,6 +46,7 @@ pub struct VoiceStatus {
     pub agent_id: Option<String>,
     pub voice_id: Option<String>,
     pub voice_name: Option<String>,
+    pub llm: Option<String>,
     /// The agent exists but was set up with an older prompt/tool set.
     pub needs_update: bool,
 }
@@ -108,6 +117,7 @@ pub fn voice_status(app: tauri::AppHandle) -> Result<VoiceStatus, String> {
         agent_id: c.agent_id,
         voice_id: c.voice_id,
         voice_name: c.voice_name,
+        llm: c.llm,
     })
 }
 
@@ -233,15 +243,21 @@ pub async fn setup_voice_agent(app: tauri::AppHandle, voice_id: String, voice_na
             }
         }
     }
+    // Pick the fastest model this workspace offers; leave ElevenLabs' default if the list can't be read.
+    let llm = call(reqwest::Method::GET, "/v1/llm", &k, None).await.ok().and_then(|r| pick_llm(&r));
+    let mut prompt = serde_json::json!({ "prompt": PROMPT, "tool_ids": c.tool_ids.values().collect::<Vec<_>>() });
+    if let Some(m) = &llm {
+        prompt["llm"] = m.as_str().into();
+    }
     let agent = serde_json::json!({
         "name": "Flow Command",
         "conversation_config": {
             "agent": {
                 "first_message": "Hi, what do you need?",
                 "language": "en",
-                "prompt": { "prompt": PROMPT, "tool_ids": c.tool_ids.values().collect::<Vec<_>>() },
+                "prompt": prompt,
             },
-            "tts": { "voice_id": voice_id },
+            "tts": { "voice_id": voice_id, "model_id": TTS_MODEL },
         },
         // Lets the app start typed (text-only) sessions without the microphone.
         "platform_settings": { "overrides": { "conversation_config_override": { "conversation": { "text_only": true } } } },
@@ -257,9 +273,17 @@ pub async fn setup_voice_agent(app: tauri::AppHandle, voice_id: String, voice_na
     c.agent_id = Some(agent_id);
     c.voice_id = Some(voice_id);
     c.voice_name = voice_name;
+    c.llm = llm;
     c.setup_version = SETUP_VERSION;
     save_config(&app, &c)?;
     Ok(c)
+}
+
+/// First FAST_LLMS entry that GET /v1/llm lists and doesn't mark deprecated.
+fn pick_llm(list: &serde_json::Value) -> Option<String> {
+    let models = list["models"].as_array()?;
+    let available = |id: &str| models.iter().any(|m| m["model_id"] == id && !m["deprecated"].as_bool().unwrap_or(false));
+    FAST_LLMS.iter().find(|id| available(id)).map(|s| s.to_string())
 }
 
 async fn create_agent(key: &str, agent: serde_json::Value) -> Result<String, String> {
@@ -288,6 +312,16 @@ pub async fn voice_text_session_url(app: tauri::AppHandle) -> Result<String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_fastest_available_llm() {
+        let list = serde_json::json!({"models": [
+            {"model_id": "gemini-2.5-flash", "deprecated": false},
+            {"model_id": "gpt-4.1-nano", "deprecated": false},
+            {"model_id": "gemini-2.5-flash-lite", "deprecated": true}]});
+        assert_eq!(pick_llm(&list).as_deref(), Some("gpt-4.1-nano"));
+        assert_eq!(pick_llm(&serde_json::json!({"models": []})), None);
+    }
 
     #[test]
     fn tool_defs_are_well_formed() {

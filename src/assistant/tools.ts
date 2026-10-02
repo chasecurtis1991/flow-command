@@ -22,10 +22,20 @@ const label = (v: InventoryVariant) => `${v.productTitle}${v.variantTitle ? ` ·
 const fail = (e: unknown) => `Error: ${String(e).replace(/^Error:\s*/, "").slice(0, 240)}`;
 
 // ---- inventory ----
-async function inventory(store: StoreId): Promise<InventoryVariant[]> {
-  const r = await invoke<InventoryResult>("list_inventory", { storeId: store });
-  return r.variants.filter((v) => !HIDDEN_INVENTORY.test(v.productTitle));
+// Loading a store's inventory is up to 15 Shopify pages, so keep it for a minute; the panel clears it after an Apply
+// and preloads the open store when a session starts.
+const INV_TTL = 60_000;
+const invCache = new Map<StoreId, { at: number; p: Promise<InventoryVariant[]> }>();
+function inventory(store: StoreId): Promise<InventoryVariant[]> {
+  const hit = invCache.get(store);
+  if (hit && Date.now() - hit.at < INV_TTL) return hit.p;
+  const p = invoke<InventoryResult>("list_inventory", { storeId: store }).then((r) => r.variants.filter((v) => !HIDDEN_INVENTORY.test(v.productTitle)));
+  invCache.set(store, { at: Date.now(), p });
+  p.catch(() => invCache.delete(store)); // don't cache failures
+  return p;
 }
+export const preloadInventory = (store: StoreId) => { void inventory(store).catch(() => {}); };
+export const clearToolCache = () => invCache.clear();
 /** Every word of the query must appear in "product variant sku" (so "lifter 7g" and "FG-LFT-7G" both work). */
 function matchVariants(all: InventoryVariant[], query: string): InventoryVariant[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -98,15 +108,15 @@ async function getOrderTool(ctx: ToolContext, a: Args): Promise<string> {
 async function salesSummary(ctx: ToolContext, a: Args): Promise<string> {
   const days = Math.min(90, Math.max(1, Math.round(Number(a.days) || 7)));
   const stores = a.store === "all" ? STORES.map((s) => s.id) : [storeOf(ctx, a.store)];
-  const out: string[] = [];
-  for (const id of stores) {
+  // All stores at once (one ShopifyQL request each).
+  const out = await Promise.all(stores.map(async (id) => {
     try {
       const r = await invoke<SalesReport>("sales_report", { storeId: id, days });
       const t = r.totals, m = (n: number) => money(`${n.toFixed(2)} ${r.currency}`);
-      out.push(`${storeById(id).label}, last ${days} day${days === 1 ? "" : "s"}: ${t.orders} orders, gross ${m(t.grossSales)}, discounts ${m(t.discounts)}, returns ${m(t.returns)}, net ${m(t.netSales)}, total ${m(t.totalSales)}, average order ${m(t.averageOrderValue)}.`
-        + (r.topProducts.length ? ` Top: ${r.topProducts.slice(0, 3).map((p) => `${p.title} ${m(p.netSales)}`).join("; ")}.` : ""));
-    } catch (e) { out.push(`${storeById(id).label}: ${fail(e)}`); }
-  }
+      return `${storeById(id).label}, last ${days} day${days === 1 ? "" : "s"}: ${t.orders} orders, gross ${m(t.grossSales)}, discounts ${m(t.discounts)}, returns ${m(t.returns)}, net ${m(t.netSales)}, total ${m(t.totalSales)}, average order ${m(t.averageOrderValue)}.`
+        + (r.topProducts.length ? ` Top: ${r.topProducts.slice(0, 3).map((p) => `${p.title} ${m(p.netSales)}`).join("; ")}.` : "");
+    } catch (e) { return `${storeById(id).label}: ${fail(e)}`; }
+  }));
   return out.join("\n");
 }
 

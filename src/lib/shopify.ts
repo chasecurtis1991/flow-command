@@ -526,7 +526,7 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
 }
 
 // ---- voice assistant (mirrors voice.rs; the ElevenLabs key never leaves Rust) ----
-export interface VoiceStatus { hasKey: boolean; keyHint: string | null; agentId: string | null; voiceId: string | null; voiceName: string | null; needsUpdate: boolean }
+export interface VoiceStatus { hasKey: boolean; keyHint: string | null; agentId: string | null; voiceId: string | null; voiceName: string | null; llm: string | null; needsUpdate: boolean }
 export interface Voice { id: string; name: string; category: string | null }
 export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
 export const saveElevenLabsKey = (key: string) => invoke<string>("save_elevenlabs_key", { key });
