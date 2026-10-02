@@ -42,9 +42,17 @@ export function Customers() {
   const navigate = useNavigate();
   const { store, storeReady, toast } = useApp();
   const cust = useCustomers();
-  const [q, setQ] = useState("");
   // Selected customer lives in ?sel=<gid>; the detail panel opens beside the list and closes with × or Esc.
   const [params, setParams] = useSearchParams();
+  const [q, setQ] = useState(() => params.get("q") ?? "");
+  // ?q= deep link (assistant), consumed also while the page is open; keeps ?sel.
+  useEffect(() => {
+    const pq = params.get("q");
+    if (pq == null) return;
+    setQ(pq);
+    const sel = params.get("sel");
+    setParams(sel ? { sel } : {}, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const selected = params.get("sel");
   const select = (id: string | null) => setParams(id ? { sel: id } : {}, { replace: true });
   useEffect(() => {

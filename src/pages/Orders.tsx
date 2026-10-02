@@ -60,14 +60,20 @@ export function Orders() {
   const recent = useOrders(); // 50 most recent (Layout warms it) — used to resolve ⌘K deep links
   const tbl = useOrdersTable();
   const [params, setParams] = useSearchParams();
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => params.get("q") ?? "");
 
-  // Selection lives in ?sel=<gid> so the ⌘K palette can deep-link; default to the first row of the page.
+  // Selection lives in ?sel=<gid> so the ⌘K palette and the assistant can deep-link to any order (the detail pane
+  // loads it by id even when it isn't on the current page); default to the first row of the page.
   const selParam = params.get("sel");
-  const inPage = !!selParam && tbl.orders.some((o) => o.id === selParam);
   const recentSel = selParam ? recent.orders.find((o) => o.id === selParam) : undefined;
-  const selectedId = selParam && (inPage || recentSel) ? selParam : tbl.orders[0]?.id ?? null;
+  const selectedId = selParam ?? tbl.orders[0]?.id ?? null;
   const select = (id: string) => setParams({ sel: id }, { replace: true });
+  // ?open=refund|fulfill|notes opens that action on the selected order (assistant: "refund R94244"); `n` makes a
+  // repeated command fire again.
+  const [autoOpen, setAutoOpen] = useState<{ kind: string; id: string; n: number } | null>(null);
+  // A store switch makes a selected order from the old store meaningless.
+  const [selStore, setSelStore] = useState(store);
+  useEffect(() => { if (store !== selStore) { setSelStore(store); if (selParam) setParams({}, { replace: true }); } }, [store]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const columns = useMemo(() => orderColumns(selectedId), [selectedId]);
   const table = useTable<Order>({
@@ -76,6 +82,17 @@ export function Orders() {
   });
   const unfulfilledOnly = sameSet(table.filters.fulfillment, OPEN_WORK_STATUSES);
   const toggleUnfulfilled = () => table.setFilter("fulfillment", unfulfilledOnly ? null : [...OPEN_WORK_STATUSES]);
+  // Deep links (assistant, palette) are consumed whenever they appear, also while this page is already open:
+  // ?q= search, ?filter=all|unfulfilled, ?open=refund|fulfill|notes. (The detail pane loads a linked order even when
+  // the list's filter hides its row.)
+  useEffect(() => {
+    const f = params.get("filter"), pq = params.get("q"), open = params.get("open");
+    if (f === "all") table.setFilter("fulfillment", null);
+    else if (f === "unfulfilled") table.setFilter("fulfillment", [...OPEN_WORK_STATUSES]);
+    if (pq != null) setQ(pq);
+    if (open && selParam) setAutoOpen({ kind: open, id: selParam, n: Date.now() });
+    if (f || pq != null || open) setParams(selParam ? { sel: selParam } : {}, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   // A deep link to a fulfilled/closed order widens the view so its row can show.
   useEffect(() => { if (recentSel && !isOpenFulfillment(recentSel) && unfulfilledOnly) table.setFilter("fulfillment", null); }, [recentSel]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -182,15 +199,16 @@ export function Orders() {
             <button className="btn btn-control btn-sm" disabled={!canNext} onClick={next} aria-label="Next page">Next ›</button>
           </div>
         </div>
-        <Detail store={store} id={detail.id} data={detail.data} error={detail.error} onReload={() => setReload((n) => n + 1)}
+        <Detail store={store} id={detail.id} data={detail.data} error={detail.error} autoOpen={autoOpen && autoOpen.id === detail.id ? autoOpen : null} onReload={() => setReload((n) => n + 1)}
           onSaved={(v) => setDetail((d) => (d.data ? { ...d, data: { ...d.data, ...v } } : d))} />
       </div>
     </section>
   );
 }
 
-function Detail({ store, id, data, error, onSaved, onReload }: {
+function Detail({ store, id, data, error, onSaved, onReload, autoOpen }: {
   store: StoreId; id: string; data?: OrderDetail; error?: string; onSaved: (v: { note: string | null; tags: string[] }) => void; onReload: () => void;
+  autoOpen?: { kind: string; n: number } | null;
 }) {
   if (!id) return <div className="detail"><div className="state mute">Select an order</div></div>;
   if (!data) {
@@ -241,12 +259,12 @@ function Detail({ store, id, data, error, onSaved, onReload }: {
           <span className="total">Total</span><span className="total r">{money(data.totalPrice)}</span>
         </div>
       </div>
-      <OrderFulfillment store={store} orderId={data.id} onChanged={() => { onReload(); invalidateOrdersTable(); }} />
-      <OrderNotes store={store} data={data} onSaved={onSaved} onReload={onReload} />
+      <OrderFulfillment store={store} orderId={data.id} autoOpen={autoOpen?.kind === "fulfill" ? autoOpen.n : 0} onChanged={() => { onReload(); invalidateOrdersTable(); }} />
+      <OrderNotes store={store} data={data} autoEdit={autoOpen?.kind === "notes" ? autoOpen.n : 0} onSaved={onSaved} onReload={onReload} />
       <div className="detail-section" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span className="label" style={{ marginBottom: 0 }}>Actions</span>
         <div style={{ display: "flex", gap: 8 }}>
-          <RefundAction store={store} data={data} onDone={() => { onReload(); invalidateOrdersTable(); }} />
+          <RefundAction store={store} data={data} autoOpen={autoOpen?.kind === "refund" ? autoOpen.n : 0} onDone={() => { onReload(); invalidateOrdersTable(); }} />
           <button className="btn btn-secondary" onClick={() => void openUrl(adminUrl(store, data.id))}>Open in Shopify</button>
         </div>
         <div className="mute" style={{ fontSize: 11.5 }}>Fulfill from Shipments above. Refunds go back to the original payment method.</div>
@@ -256,9 +274,10 @@ function Detail({ store, id, data, error, onSaved, onReload }: {
 }
 
 /** Own component so its open state doesn't sit behind Detail's early returns. */
-function RefundAction({ store, data, onDone }: { store: StoreId; data: OrderDetail; onDone: () => void }) {
-  const [open, setOpen] = useState(false);
+function RefundAction({ store, data, onDone, autoOpen = 0 }: { store: StoreId; data: OrderDetail; onDone: () => void; autoOpen?: number }) {
   const refunded = data.displayFinancialStatus === "REFUNDED" || data.displayFinancialStatus === "VOIDED";
+  const [open, setOpen] = useState(false);
+  useEffect(() => { if (autoOpen && !refunded) setOpen(true); }, [autoOpen]); // eslint-disable-line react-hooks/exhaustive-deps
   return <>
     <button className="btn btn-control grow" disabled={refunded} title={refunded ? "Already fully refunded" : undefined} onClick={() => setOpen(true)}>Refund…</button>
     {open && <RefundDialog store={store} orderId={data.id} onClose={() => setOpen(false)} onDone={onDone} />}

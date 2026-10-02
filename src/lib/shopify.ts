@@ -54,7 +54,8 @@ export interface Credentials { clientId: string; clientSecret: string }
 // ---- invoke wrappers ----
 export const getActiveStore = () => invoke<StoreDef>("get_active_store");
 export const setActiveStore = (storeId: StoreId) => invoke<StoreDef>("set_active_store", { storeId });
-export const getOrder = (orderId: string) => invoke<OrderDetail>("get_order", { orderId });
+/** storeId omitted = the open store. */
+export const getOrder = (orderId: string, storeId?: StoreId) => invoke<OrderDetail>("get_order", { orderId, storeId });
 // ---- fulfillment (mirrors order_fulfill.rs) ----
 export interface FoLine { id: string; title: string; sku: string | null; remaining: number; total: number }
 export interface FulfillmentOrder { id: string; status: string; location: string | null; canFulfill: boolean; lines: FoLine[] }
@@ -523,6 +524,16 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   const hit = list.find((x) => x.handle === p.handle) ?? list.find((x) => x.title.trim().toLowerCase() === t);
   return hit?.status ?? null;
 }
+
+// ---- voice assistant (mirrors voice.rs; the ElevenLabs key never leaves Rust) ----
+export interface VoiceStatus { hasKey: boolean; keyHint: string | null; agentId: string | null; voiceId: string | null; voiceName: string | null; llm: string | null; needsUpdate: boolean }
+export interface Voice { id: string; name: string; category: string | null }
+export const voiceStatus = () => invoke<VoiceStatus>("voice_status");
+export const saveElevenLabsKey = (key: string) => invoke<string>("save_elevenlabs_key", { key });
+export const listVoices = () => invoke<Voice[]>("list_voices");
+export const setupVoiceAgent = (voiceId: string, voiceName?: string) => invoke<unknown>("setup_voice_agent", { voiceId, voiceName });
+export const voiceSessionToken = () => invoke<string>("voice_session_token");
+export const voiceTextSessionUrl = () => invoke<string>("voice_text_session_url");
 
 // ---- product detail (mirrors product_detail.rs) ----
 export interface ProductVariantDetail { id: string; title: string; sku: string | null; barcode: string | null; price: string; compareAtPrice: string | null; inventory: number; tracked: boolean }

@@ -173,6 +173,34 @@ switching store clears it): orders / lifetime spend / average order, email (clic
 consent, default address, B2B company, tags and note, and their 10 most recent orders with payment / fulfillment
 status. A recent order opens in Orders when it's among the loaded recent orders, otherwise in Shopify admin.
 
+### Voice assistant (ElevenLabs)
+**Setup (once):** Settings → *ElevenLabs · voice assistant*: paste your ElevenLabs API key (saved to the Keychain,
+never sent to the web view), pick a voice (your cloned voices are listed first), click **Set up agent**. That creates a
+private "Flow Command" agent plus its 7 client tools in your ElevenLabs workspace (ids in `<app data>/voice-config.json`;
+**Update agent** re-applies the prompt/tools after an app update or a voice change).
+
+**Use:** **Talk** in the title bar (⌘J) opens the assistant drawer. **Start talking** (macOS asks for the mic once) or
+type a question. The conversation keeps going while you change screens or hide the drawer (the Talk dot stays green);
+**End** stops it and releases the mic. The agent is told which screen, store and record you're on.
+
+**Hands-free navigation** — say where to go and it goes, no confirmation: any screen with a view or search ("FGINV
+tab", "catalog grid", "unfulfilled orders", "analytics for 30 days", "search customers for Ortega"); switch stores;
+open an order ("open R94244", "refund / fulfill / edit notes on R94244", "track R94244", "show R94244 in Shopify"), a
+customer (panel, Shopify, or a new email), a product (panel, Shopify, website page, Split variants), an inventory item
+(show it, or open Adjust stock), a COA by batch; and app controls ("go back", "close that", "collapse the sidebar",
+"open the command palette", "refresh", "hide the assistant"). Records in another store switch the app to that store
+first. Refund / fulfill / notes / adjust / split only open the form — you still confirm there. Every screen also
+accepts these as links (`?sel=`, `?q=`, `?open=refund|fulfill|notes`, `?filter=`, `?view=`, `?days=`, `?adjust=`,
+`?split=1`, `?pick=1`), including while it's already open.
+
+What it can do: look up stock (`find_inventory`), search orders (`find_orders`), read one order (`get_order` —
+spoken numbers like "R10482" match "#R-10482"), Shopify sales for a range (`sales_summary`), open a screen
+(`open_screen`). For changes it can only *propose*: `propose_inventory_adjustment` and `propose_order_update` put a
+**review card** in the drawer (store, item/order, before → after); nothing is written until you click **Apply**, which
+runs the same Adjust / Notes & tags commands with their compare-and-swap and idempotency safeguards, then tells the
+agent the real result. Ambiguous items, locations or orders come back as a question. Tools take an explicit store
+("in B2B…"), defaulting to the open one. Audio and transcripts are processed by ElevenLabs.
+
 ### Analytics
 Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
 match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and

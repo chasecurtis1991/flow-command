@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { prefs } from "../lib/app";
 import { ANALYTICS_RANGES, STORES, type AnalyticsEntry, type StoreId, loadAnalytics, money, ordersByDay, useAnalytics } from "../lib/shopify";
 import { driftVals } from "../lib/mock";
@@ -11,7 +12,15 @@ const LOADING: AnalyticsEntry = { status: "loading", data: null, error: null };
 
 export function Analytics() {
   const an = useAnalytics();
+  const [params, setParams] = useSearchParams();
   const [days, setDays] = useState(() => Number(prefs.get("analytics.days", "14", RANGE)));
+  // ?days= deep link (assistant: "analytics for 30 days"), consumed also while the page is open.
+  useEffect(() => {
+    const d = params.get("days");
+    if (d == null) return;
+    if (RANGE.includes(d)) setDays(Number(d));
+    setParams({}, { replace: true });
+  }, [params, setParams]);
   useEffect(() => { prefs.set("analytics.days", String(days)); }, [days]);
   useEffect(() => {
     if (an.days !== days || STORES.some((s) => an.stores[s.id].status === "idle")) void loadAnalytics(days);

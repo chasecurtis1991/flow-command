@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { type OrderDetail, type StoreId, updateOrderNoteTags } from "../lib/shopify";
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 /** Notes + tags for one order: read view, then an inline editor whose Save sends only what changed. */
-export function OrderNotes({ store, data, onSaved, onReload }: {
+export function OrderNotes({ store, data, onSaved, onReload, autoEdit }: {
   store: StoreId; data: OrderDetail;
-  onSaved: (v: { note: string | null; tags: string[] }) => void; onReload: () => void;
+  onSaved: (v: { note: string | null; tags: string[] }) => void; onReload: () => void; autoEdit?: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
@@ -18,6 +18,7 @@ export function OrderNotes({ store, data, onSaved, onReload }: {
   const [error, setError] = useState<string | null>(null);
   const [pinned, setPinned] = useState<StoreId>(store);
 
+  useEffect(() => { if (autoEdit) start(); }, [autoEdit]); // eslint-disable-line react-hooks/exhaustive-deps — ?open=notes
   const start = () => { setNote(data.note ?? ""); setRemoved([]); setAdded([]); setDraftTag(""); setError(null); setPinned(store); setEditing(true); };
   const original = data.note ?? "";
   const noteChanged = note.trimEnd() !== original.trimEnd();

@@ -16,6 +16,7 @@ mod order_notes;
 mod order_refund;
 mod product_detail;
 mod variant_split;
+mod voice;
 
 const KEYCHAIN_SERVICE: &str = "com.flowgardens.command";
 const KEY_CLIENT_ID: &str = "shopify_client_id";
@@ -301,6 +302,14 @@ fn known_stores() -> Vec<StoreInfo> {
             domain: SHOP_BULK.into(),
         },
     ]
+}
+
+/// An explicit store (assistant tools, per-store views) or, when omitted, the store the app has open.
+fn domain_for(store_id: Option<String>) -> Result<String, String> {
+    Ok(match store_id {
+        Some(id) => store_by_id(&id)?.domain,
+        None => get_active_store()?.domain,
+    })
 }
 
 fn store_by_id(store_id: &str) -> Result<StoreInfo, String> {
@@ -711,8 +720,9 @@ async fn list_orders_page(
     sort_key: Option<String>,
     reverse: Option<bool>,
     query: Option<String>,
+    store_id: Option<String>,
 ) -> Result<OrdersPage, String> {
-    let shop_domain = get_active_store()?.domain;
+    let shop_domain = domain_for(store_id)?;
     let (first, sort_key, reverse) = orders_page_args(first, sort_key.as_deref(), reverse)?;
     fetch_orders_page(
         &shop_domain,
@@ -727,9 +737,8 @@ async fn list_orders_page(
 
 // Get single order with line items (using GID)
 #[tauri::command]
-async fn get_order(order_id: String) -> Result<OrderDetail, String> {
-    let active = get_active_store()?;
-    let shop_domain = active.domain;
+async fn get_order(order_id: String, store_id: Option<String>) -> Result<OrderDetail, String> {
+    let shop_domain = domain_for(store_id)?;
 
     let query = format!(
         r#"
@@ -994,8 +1003,8 @@ async fn fetch_inventory_pages(
 
 // List all variants with per-location inventory for active store
 #[tauri::command]
-async fn list_inventory() -> Result<InventoryResult, String> {
-    let shop_domain = get_active_store()?.domain;
+async fn list_inventory(store_id: Option<String>) -> Result<InventoryResult, String> {
+    let shop_domain = domain_for(store_id)?;
 
     let (mut variants, truncated, levels_error) = match fetch_inventory_pages(&shop_domain, true).await {
         Ok((v, t)) => (v, t, None),
@@ -1143,8 +1152,8 @@ fn scope_denied(e: String, shop_domain: &str, scope: &str, what: &str) -> String
 
 // List every product in the active store's catalog (title-sorted; needs read_products)
 #[tauri::command]
-async fn list_products() -> Result<CatalogResult, String> {
-    let shop_domain = get_active_store()?.domain;
+async fn list_products(store_id: Option<String>) -> Result<CatalogResult, String> {
+    let shop_domain = domain_for(store_id)?;
 
     let (mut products, truncated) = fetch_catalog_pages(&shop_domain)
         .await
@@ -1226,8 +1235,8 @@ fn parse_customers(result: &serde_json::Value) -> Result<CustomersResult, String
 // `query` is Shopify search syntax; with a search we sort by relevance, otherwise newest activity first.
 // ponytail: no cursor paging — the UI says "search to narrow" past 100; add `after` if someone needs page 2.
 #[tauri::command]
-async fn list_customers(query: Option<String>, first: Option<i32>) -> Result<CustomersResult, String> {
-    let shop_domain = get_active_store()?.domain;
+async fn list_customers(query: Option<String>, first: Option<i32>, store_id: Option<String>) -> Result<CustomersResult, String> {
+    let shop_domain = domain_for(store_id)?;
     let query = query.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let variables = serde_json::json!({
         "first": first.unwrap_or(CUSTOMERS_MAX_PAGE_SIZE).clamp(1, CUSTOMERS_MAX_PAGE_SIZE),
@@ -4194,6 +4203,12 @@ pub fn run() {
             activity::list_activity,
             customer_detail::get_customer,
             product_detail::get_product_detail,
+            voice::voice_status,
+            voice::save_elevenlabs_key,
+            voice::list_voices,
+            voice::setup_voice_agent,
+            voice::voice_session_token,
+            voice::voice_text_session_url,
             list_coas,
             save_coa_link,
             save_coa_fields,

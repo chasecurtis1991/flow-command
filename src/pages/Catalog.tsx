@@ -120,8 +120,17 @@ export function Catalog() {
     if (pq != null) setQ(pq);
     const ps = params.get("status")?.toUpperCase();
     if (ps) table.setFilter("status", STATUS_OPTIONS.some((o) => o.value === ps) ? [ps] : null);
-    setParams({}, { replace: true });
+    const keep = params.get("sel");
+    setParams(keep ? { sel: keep } : {}, { replace: true });
   }, [params, setParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ?split=1 (assistant: "split the variants of Lifter") opens Split variants for the selected product once it's loaded.
+  useEffect(() => {
+    if (params.get("split") !== "1" || !selected || cat.status !== "data") return;
+    const p = products.find((x) => x.id === selected);
+    if (p && p.variantCount > 1) split(p);
+    setParams({ sel: selected }, { replace: true });
+  }, [params, selected, cat.status]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const sync = () => {
     const t0 = performance.now();

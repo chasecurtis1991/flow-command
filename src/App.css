@@ -640,3 +640,23 @@ dialog.stock-dialog { width: 720px; }
 .product-desc { font-size: 12.5px; line-height: 1.55; white-space: pre-line; max-height: 140px; overflow: auto; }
 .kv { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 6px 12px; font-size: 12.5px; }
 .kv > span:nth-child(odd) { color: var(--mute); }
+/* Assistant drawer */
+.talk-toggle { display: inline-flex; align-items: center; gap: 6px; }
+.assistant { position: absolute; top: 52px; right: 0; bottom: 0; width: 380px; max-width: 100vw; z-index: 20; display: flex; flex-direction: column;
+  background: rgba(14, 16, 21, 0.97); backdrop-filter: blur(24px); border-left: 1px solid var(--hairline); box-shadow: -24px 0 60px -20px rgba(0, 0, 0, 0.7);
+  transform: translateX(100%); visibility: hidden; transition: transform 0.25s var(--spring), visibility 0s linear 0.25s; }
+.assistant.open { transform: none; visibility: visible; transition: transform 0.25s var(--spring); }
+.assistant-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--hairline); }
+.assistant-body { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.assistant-hint { font-size: 12.5px; line-height: 1.55; padding: 8px 4px; }
+.assistant-foot { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--hairline); }
+.talk-btn { width: 100%; height: 34px; }
+.bubble { max-width: 88%; padding: 7px 10px; border-radius: 10px; font-size: 13px; line-height: 1.45; white-space: pre-wrap; }
+.bubble.user { align-self: flex-end; background: color-mix(in oklch, var(--accent), transparent 78%); }
+.bubble.agent { align-self: flex-start; background: rgba(255, 255, 255, 0.06); }
+.proposal { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; border: 1px solid color-mix(in oklch, var(--amber), transparent 55%); background: color-mix(in oklch, var(--amber), transparent 93%); }
+.proposal.applied { border-color: color-mix(in oklch, var(--green), transparent 55%); background: color-mix(in oklch, var(--green), transparent 94%); }
+.proposal.dismissed { opacity: 0.55; border-color: var(--hairline); background: transparent; }
+.proposal.failed { border-color: color-mix(in oklch, var(--red), transparent 50%); }
+.proposal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.proposal-body { font-size: 13px; }

@@ -7,6 +7,8 @@ import {
 } from "../lib/shopify";
 import { customers } from "../lib/mock";
 import { Icon, type IconName } from "./icons";
+import { ConversationProvider, useConversationStatus } from "@elevenlabs/react";
+import { AssistantPanel } from "../assistant/AssistantPanel";
 
 const NAV: { path: string; label: string; icon: IconName }[] = [
   { path: "/home", label: "Home", icon: "home" },
@@ -25,7 +27,7 @@ const focusToggle = (sel: string) => requestAnimationFrame(() => document.queryS
 
 export function Layout() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const orders = useOrders();
   const coas = useCoas(); // badge only; the Lab page loads it
 
@@ -36,6 +38,7 @@ export function Layout() {
   const [accent, setAccent] = useState<Accent>(() => prefs.get("accent", "blue", ["blue", "green"] as const));
   const [density, setDensity] = useState<Density>(() => prefs.get("density", "comfortable", ["compact", "comfortable"] as const));
   const [palette, setPalette] = useState(false);
+  const [assistant, setAssistant] = useState(false);
   // Receive opens the Shopify receiving dialog on Inventory (?action=receive), from Home, ⌘⇧R and the palette.
   const openReceive = useCallback(() => navigate("/inventory?action=receive"), [navigate]);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
@@ -90,6 +93,7 @@ export function Layout() {
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (mod && k === "k") { e.preventDefault(); setPalette((p) => !p); return; }
+      if (mod && k === "j") { e.preventDefault(); setAssistant((a) => !a); return; }
       if (e.key === "Escape") { setPalette(false); return; }
       if (!mod) return;
       if (e.key === "\\") { e.preventDefault(); setCollapsed((c) => !c); return; }
@@ -108,6 +112,28 @@ export function Layout() {
     openPalette: () => setPalette(true), openSheet: openReceive, refresh,
   }), [store, setStore, storeReady, accent, density, toast, refresh, openReceive]);
 
+  // App chrome the voice assistant can drive ("go back", "close that", "collapse the sidebar", …).
+  const uiAction = (action: string): string => {
+    switch (action) {
+      case "go_back": navigate(-1); return "Went back.";
+      case "go_forward": navigate(1); return "Went forward.";
+      case "close_panel": {
+        const d = document.querySelector<HTMLDialogElement>("dialog[open]");
+        if (d) { d.dispatchEvent(new Event("cancel", { cancelable: true })); return "Closed the dialog."; }
+        if (palette) { setPalette(false); return "Closed the command palette."; }
+        const p = new URLSearchParams(search);
+        if (p.has("sel")) { p.delete("sel"); navigate(`${pathname}${p.size ? `?${p}` : ""}`, { replace: true }); return "Closed the detail panel."; }
+        return "Nothing is open to close.";
+      }
+      case "collapse_sidebar": setCollapsed(true); return "Collapsed the sidebar.";
+      case "expand_sidebar": setCollapsed(false); return "Expanded the sidebar.";
+      case "toggle_sidebar": setCollapsed((c) => !c); return "Toggled the sidebar.";
+      case "open_command_palette": setPalette(true); return "Opened the command palette.";
+      case "refresh": refresh(); return "Refreshing this screen from Shopify.";
+      case "hide_assistant": setAssistant(false); return "Hid the assistant panel; the conversation continues.";
+      default: return `Error: unknown action "${action}".`;
+    }
+  };
   const title = TITLES[pathname] ?? "Flow Command";
   const openCount = orders.status === "data" ? orders.orders.filter(isOpenFulfillment).length : 0;
   const unposted = coas.status === "data" ? coas.data!.coas.filter((c) => c.postedStatus === "unposted").length : 0; // no badge until loaded
@@ -115,6 +141,7 @@ export function Layout() {
 
   return (
     <AppContext.Provider value={ctx}>
+      <ConversationProvider>
       <div className={`app${collapsed ? " collapsed" : ""}`}>
         <aside className="sidebar">
           <div className="sidebar-drag" data-tauri-drag-region="" />
@@ -173,6 +200,7 @@ export function Layout() {
                 </button>
               ))}
             </div>
+            <TalkButton open={assistant} onClick={() => setAssistant((a) => !a)} />
             <button className="search-btn" onClick={() => setPalette(true)}>
               <span>Search or run a command…</span>
               <span className="kbd">⌘K</span>
@@ -207,7 +235,9 @@ export function Layout() {
             }}
           />
         )}
+        <AssistantPanel open={assistant} onClose={() => setAssistant(false)} onUi={uiAction} />
       </div>
+      </ConversationProvider>
     </AppContext.Provider>
   );
 }
@@ -342,3 +372,13 @@ function Palette({ store, orders, onClose, actions }: { store: StoreId; orders: 
   );
 }
 
+
+/** Title-bar toggle for the assistant; the dot shows a live conversation even while the panel is hidden. */
+function TalkButton({ open, onClick }: { open: boolean; onClick: () => void }) {
+  const { status } = useConversationStatus();
+  return (
+    <button className={`btn btn-control talk-toggle${open ? " on" : ""}`} title="Assistant (⌘J)" aria-pressed={open} onClick={onClick}>
+      <span className={`dot d7 ${status === "connected" ? "green" : status === "connecting" ? "amber" : "mute"}`} />Talk
+    </button>
+  );
+}
