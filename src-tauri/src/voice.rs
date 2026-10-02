@@ -176,12 +176,12 @@ fn tool_defs() -> Vec<serde_json::Value> {
         tool("sales_summary", "Shopify's sales report: orders, gross, discounts, returns, net and total sales, average order, top products.",
             serde_json::json!({ "days": { "type": "integer", "description": "Number of days ending today (1 = today), up to 90." }, "store": { "type": "string", "enum": ["retail", "b2b", "bulk", "all"], "description": "Store or 'all'; omit for the open store." } }), &["days"]),
         tool("open_screen", "Show a screen in the app, optionally searching for something on it.",
-            serde_json::json!({ "screen": { "type": "string", "enum": ["home", "orders", "inventory", "catalog", "lab", "customers", "analytics", "settings"] }, "search": { "type": "string", "description": "Optional search text, e.g. a product or customer name." } }), &["screen"]),
+            serde_json::json!({ "screen": { "type": "string", "enum": ["home", "orders", "inventory", "catalog", "lab", "customers", "analytics", "settings"], "description": "Which screen to show." }, "search": { "type": "string", "description": "Optional search text, e.g. a product or customer name." } }), &["screen"]),
         tool("propose_inventory_adjustment", "Prepare (not apply) a stock change for one variant at one location. Shows a review card; the user applies it.",
             serde_json::json!({
                 "item": { "type": "string", "description": "SKU, or product and variant, e.g. 'Lifter 7g'." },
                 "change": { "type": "integer", "description": "Units to add (positive) or remove (negative)." },
-                "reason": { "type": "string", "enum": ["correction", "cycle_count_available", "damaged", "shrinkage", "received", "restock", "promotion", "other"] },
+                "reason": { "type": "string", "enum": ["correction", "cycle_count_available", "damaged", "shrinkage", "received", "restock", "promotion", "other"], "description": "Why the stock changes (cycle_count_available = counted stock differs)." },
                 "location": { "type": "string", "description": "Location name if the item is stocked in several." },
                 "store": store }), &["item", "change", "reason"]),
         tool("propose_order_update", "Prepare (not apply) adding to an order's note and/or adding or removing tags. Existing note text and other tags are kept. Shows a review card; the user applies it.",
@@ -202,6 +202,15 @@ pub async fn setup_voice_agent(app: tauri::AppHandle, voice_id: String, voice_na
         return Err("Pick a voice first.".into());
     }
     let mut c = load_config(&app);
+    // Adopt client tools already in the workspace under our names (e.g. left by an interrupted setup) instead of duplicating them.
+    if let Ok(list) = call(reqwest::Method::GET, "/v1/convai/tools", &k, None).await {
+        for t in list["tools"].as_array().into_iter().flatten() {
+            let (Some(id), Some(name)) = (t["id"].as_str(), t["tool_config"]["name"].as_str()) else { continue };
+            if t["tool_config"]["type"] == "client" && tool_defs().iter().any(|d| d["name"] == name) {
+                c.tool_ids.entry(name.to_string()).or_insert_with(|| id.to_string());
+            }
+        }
+    }
     for def in tool_defs() {
         let name = def["name"].as_str().unwrap_or_default().to_string();
         let body = serde_json::json!({ "tool_config": def });
@@ -212,12 +221,15 @@ pub async fn setup_voice_agent(app: tauri::AppHandle, voice_id: String, voice_na
                 Err(e) if e.contains("404") => {
                     let r = call(reqwest::Method::POST, "/v1/convai/tools", &k, Some(body)).await?;
                     c.tool_ids.insert(name, r["id"].as_str().ok_or("ElevenLabs returned no tool id")?.to_string());
+                    save_config(&app, &c)?;
                 }
                 Err(e) => return Err(e),
             },
             None => {
                 let r = call(reqwest::Method::POST, "/v1/convai/tools", &k, Some(body)).await?;
                 c.tool_ids.insert(name, r["id"].as_str().ok_or("ElevenLabs returned no tool id")?.to_string());
+                // Saved right away: if a later step fails, a retry updates this tool instead of creating a duplicate.
+                save_config(&app, &c)?;
             }
         }
     }
@@ -284,6 +296,10 @@ mod tests {
         for d in &defs {
             assert_eq!(d["type"], "client");
             assert!(d["expects_response"].as_bool().unwrap());
+            // ElevenLabs rejects a parameter without a description (422 "Must set one of: description, …").
+            for (p, v) in d["parameters"]["properties"].as_object().unwrap() {
+                assert!(v["description"].as_str().is_some_and(|x| !x.is_empty()), "{}.{} has no description", d["name"], p);
+            }
             for r in d["parameters"]["required"].as_array().unwrap() {
                 assert!(d["parameters"]["properties"].get(r.as_str().unwrap()).is_some(), "{} requires an undefined param", d["name"]);
             }
