@@ -524,6 +524,16 @@ export function presenceIn(p: CatalogProduct, list: ProductPresence[] | undefine
   return hit?.status ?? null;
 }
 
+// ---- activity (mirrors activity.rs: Shopify's event log, filtered to what's worth a glance) ----
+export interface Activity { id: string; createdAt: string; message: string; action: string | null; subjectType: string | null; subjectId: string | null }
+export type StoreActivity = Activity & { store: StoreId };
+/** Latest events from every store, newest first. A store that fails is reported in `failed` instead of failing the feed. */
+export async function loadActivity(perStore = 15): Promise<{ items: StoreActivity[]; failed: StoreId[] }> {
+  const res = await Promise.allSettled(STORES.map((s) => invoke<Activity[]>("list_activity", { storeId: s.id, first: perStore })));
+  const items = res.flatMap((r, i) => (r.status === "fulfilled" ? r.value.map((a) => ({ ...a, store: STORES[i].id })) : []));
+  return { items: items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)), failed: STORES.filter((_, i) => res[i].status === "rejected").map((s) => s.id) };
+}
+
 // ---- analytics (Shopify's own reports via ShopifyQL; mirrors analytics_report.rs, needs read_reports) ----
 export interface SalesRow { day: string; orders: number; grossSales: number; discounts: number; returns: number; netSales: number; totalSales: number; averageOrderValue: number }
 export interface ProductSales { title: string; netSales: number; units: number } // units −1 when the ShopifyQL version has no net_items_sold

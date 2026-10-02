@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+mod activity;
 mod analytics_report;
 mod inventory_adjust;
 mod inventory_transfer;
@@ -4188,6 +4189,7 @@ pub fn run() {
             list_customers,
             list_product_presence,
             analytics_report::sales_report,
+            activity::list_activity,
             list_coas,
             save_coa_link,
             save_coa_fields,

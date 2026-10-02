@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useApp } from "../lib/app";
-import { STORES, type Order, type StoreId, fetchShopInfo, isOpenFulfillment, loadInventory, loadOrders, lowStock, money, moneyNum, storeById, useInventory, useOrders } from "../lib/shopify";
-import { activity } from "../lib/mock";
-import { SampleData, Status } from "../components/ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { STORES, type Order, type StoreActivity, type StoreId, adminUrl, fetchShopInfo, isOpenFulfillment, loadActivity, loadInventory, loadOrders, lowStock, money, moneyNum, storeById, useInventory, useOrders } from "../lib/shopify";
+import { Pill, Status } from "../components/ui";
 
 type Tone = "green" | "amber" | "red" | "mute";
 interface Health { kind: Tone; text: string }
@@ -14,12 +14,29 @@ const CHECKING: Health = { kind: "mute", text: "Checking…" };
 const SHORTCUTS: [string, string][] = [["Low stock", "/inventory?low=1"], ["Unposted COAs", "/lab?posted=unposted"], ["Draft products", "/catalog?status=draft"], ["Store settings", "/settings"]];
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening"; };
+// Feed row colour by Shopify event action.
+const actTone = (a: string | null): Tone =>
+  !a ? "mute" : /failure|cancelled/.test(a) ? "red" : /refund|restock|destroy|unpublished/.test(a) ? "amber" : /confirmed|fulfillment_success|published/.test(a) ? "green" : "mute";
+const actTime = (iso: string) => {
+  const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+  return new Intl.DateTimeFormat("en-US", today ? { hour: "numeric", minute: "2-digit" } : { month: "short", day: "numeric" }).format(d);
+};
 const age = (o: Order) => Date.now() - new Date(o.createdAt).getTime();
 
 export function Home() {
   const navigate = useNavigate();
   const { store, storeReady, openSheet } = useApp();
   const cache = useOrders();
+  const [feed, setFeed] = useState<{ items: StoreActivity[]; failed: StoreId[] } | null>(null);
+  const [feedError, setFeedError] = useState<string | null>(null);
+  const refreshFeed = () => { setFeedError(null); loadActivity().then(setFeed).catch((e) => setFeedError(String(e))); };
+  useEffect(refreshFeed, []);
+  // Orders of the active store open in-app; anything else opens in Shopify admin.
+  const openActivity = (a: StoreActivity) => {
+    if (!a.subjectId) return;
+    if (a.subjectType === "ORDER" && a.store === store) navigate(`/orders?sel=${encodeURIComponent(a.subjectId)}`);
+    else void openUrl(adminUrl(a.store, a.subjectId));
+  };
   const [health, setHealth] = useState<Record<StoreId, Health>>({ retail: CHECKING, b2b: CHECKING, bulk: CHECKING });
 
   useEffect(() => { if (storeReady && cache.status === "idle") void loadOrders(store); }, [storeReady, store, cache.status]);
@@ -106,15 +123,26 @@ export function Home() {
 
       <div className="home-grid">
         <div className="card clip">
-          <div className="card-head"><span>Recent activity</span><SampleData /></div>
-          {activity.map((a, i) => (
-            <div key={i} className="act-row" style={{ animationDelay: `${i * 50}ms` }}>
-              <span className="mute num" style={{ fontSize: 12 }}>{a.time}</span>
-              <span className={`dot d7 ${a.dot}`} />
-              <span className="ellip">{a.text}</span>
-              <span className="tag">{a.store}</span>
-            </div>
-          ))}
+          <div className="card-head">
+            <span>Recent activity</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {feed && <Pill kind="green" sm>Live</Pill>}
+              <button className="btn btn-control btn-sm" onClick={refreshFeed}>Refresh</button>
+            </span>
+          </div>
+          {feedError ? <div className="mute" style={{ padding: 16, fontSize: 12.5 }}>Couldn’t load activity · {feedError.slice(0, 140)}</div>
+            : !feed ? <div className="mute" style={{ padding: 16, fontSize: 12.5 }}>Loading activity from Shopify…</div>
+            : feed.items.length === 0 ? <div className="mute" style={{ padding: 16, fontSize: 12.5 }}>No recent activity.</div>
+            : feed.items.slice(0, 12).map((a, i) => (
+              <div key={`${a.store}-${a.id}`} className={`act-row${a.subjectId ? " act-link" : ""}`} style={{ animationDelay: `${i * 40}ms` }}
+                title={new Date(a.createdAt).toLocaleString()} {...(a.subjectId ? { role: "button", tabIndex: 0, onClick: () => openActivity(a), onKeyDown: (e: React.KeyboardEvent) => e.key === "Enter" && openActivity(a) } : {})}>
+                <span className="mute num" style={{ fontSize: 12 }}>{actTime(a.createdAt)}</span>
+                <span className={`dot d7 ${actTone(a.action)}`} />
+                <span className="ellip">{a.message}</span>
+                <span className="tag">{storeById(a.store).short}</span>
+              </div>
+            ))}
+          {feed && feed.failed.length > 0 && <div className="mute" style={{ padding: "8px 16px", fontSize: 11.5 }}>Couldn’t reach {feed.failed.map((id) => storeById(id).short).join(", ")}.</div>}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="card card-pad">

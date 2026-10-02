@@ -1,20 +1,11 @@
 // Sample data ported verbatim from the Claude Design export for surfaces that have no backend yet
-// (FGINV inventory, the drift chart, activity feed, the ⌘K customer stubs). Pages that render this
+// (FGINV inventory, the drift chart, the ⌘K customer stubs). Pages that render this
 // show a "Sample data" pill. Replace each export with a Tauri command as backends land.
 import { useSyncExternalStore } from "react";
 import type { Kind } from "./shopify";
 
 const T = { text: "#e6e8eb", sub: "#9aa0a8", mute: "#6b7280", green: "#3fb97a", amber: "#d9a441", red: "#e5615c" };
 
-// ---- Home ----
-export const activity = [
-  { time: "9:41", dot: "green", text: "Order #R-10482 paid · Marisol Ortega · $128.00", store: "Retail" },
-  { time: "9:12", dot: "amber", text: "Order #W-3391 partially fulfilled · Suver Haze backordered", store: "B2B" },
-  { time: "8:55", dot: "green", text: "Order #R-10481 fulfilled · tracking sent", store: "Retail" },
-  { time: "8:30", dot: "amber", text: "Drift detected: FG-SPS-3.5G · FGINV 138 vs Shopify 102", store: "FGINV" },
-  { time: "8:02", dot: "mute", text: "COA FG-24-0918 imported · needs review before posting", store: "Lab" },
-  { time: "7:45", dot: "green", text: "Token rotated for fg-craft-flower.myshopify.com", store: "Bulk" },
-] as const;
 
 // ---- Inventory · Shopify tab ----
 const invRaw: [string, string, string, number, number, number, string][] = [

@@ -159,6 +159,14 @@ location and last order. The search box runs in Shopify (relevance-ranked, so it
 the 100 shown); the toolbar count says `Showing 100 of 4,213 · search to narrow` when there are more. Column
 filters, sort and **Columns** work like the other tables; **Sync now** refetches. Needs `read_customers`.
 
+### Home: recent activity
+Shopify's own event log from all three stores, newest first: new orders, fulfillments, refunds, cancellations,
+payment/refund/fulfillment failures, restocks, products created / deleted / published, new customers and staff
+comments (an allow-list in `activity.rs` — one order logs ~8 events, most of them bookkeeping). The dot is green for
+new orders / fulfilled / published, amber for refunds / restocks / removals, red for failures / cancellations.
+Click a row: the active store's orders open in Orders, everything else opens in Shopify admin. **Refresh** reloads;
+a store that can't be reached is named under the feed.
+
 ### Analytics
 Numbers come straight from Shopify's own reports (ShopifyQL via `shopifyqlQuery`, needs `read_reports`), so they
 match Shopify admin → Analytics: per store **Orders, Gross sales, Discounts, Returns, Net sales, Total sales and

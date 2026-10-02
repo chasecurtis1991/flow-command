@@ -227,6 +227,17 @@ function customers(args: Record<string, unknown>): CustomersResult {
   const first = Math.min(100, Math.max(1, Number(args.first ?? 100)));
   return { customers: rows.slice(0, first), hasNextPage: rows.length > first, totalCount: rows.length, totalPrecision: "EXACT" };
 }
+/** Browser-preview activity: a few events per sample order (new order, fulfilled, refunded) plus a product and a customer. */
+function activityFeed(storeId: string, first: number) {
+  const out = storeOrders(storeId).slice(0, 10).flatMap((o, i) => {
+    const ev = [{ id: `${o.id}-c`, createdAt: o.createdAt, message: `Received new order ${o.name.replace("#", "")} by ${o.customerName ?? "a customer"}.`, action: "confirmed", subjectType: "ORDER", subjectId: o.id }];
+    if (o.displayFulfillmentStatus === "FULFILLED") ev.push({ id: `${o.id}-f`, createdAt: new Date(Date.parse(o.createdAt) + 3_600_000).toISOString(), message: "Fulfilled 1 item via ShipStation.", action: "fulfillment_success", subjectType: "ORDER", subjectId: o.id });
+    if (o.displayFinancialStatus?.includes("REFUNDED")) ev.push({ id: `${o.id}-r`, createdAt: new Date(Date.parse(o.createdAt) + 7_200_000).toISOString(), message: `Refunded ${o.name}.`, action: "refund_success", subjectType: "ORDER", subjectId: o.id });
+    if (i === 2) ev.push({ id: `${o.id}-p`, createdAt: new Date(Date.parse(o.createdAt) - 1_800_000).toISOString(), message: "Product was created: Cherry Wine · 14g.", action: "create", subjectType: "PRODUCT", subjectId: "gid://shopify/Product/60005" });
+    return ev;
+  });
+  return out.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)).slice(0, first);
+}
 /** Browser-preview ShopifyQL report built from the sample orders (no tax/shipping split; ~6% discounts, a little returns). */
 function salesReport(storeId: string, days: number) {
   const key = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -577,7 +588,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, sales_report: 450, list_activity: 400, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -609,6 +620,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;
     case "list_customers": return customers(args);
     case "list_product_presence": return presence(String(args.storeId));
+    case "list_activity": return activityFeed(String(args.storeId), Number(args.first ?? 25));
     case "sales_report": return salesReport(String(args.storeId), Number(args.days));
     case "list_coas": return coaList();
     case "save_coa_link": return saveCoaLink(args);

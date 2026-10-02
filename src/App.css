@@ -614,3 +614,5 @@ dialog.stock-dialog { width: 720px; }
 .top-product { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 2fr) 110px 80px; gap: 12px; align-items: center; font-size: 12.5px; }
 .top-bar { height: 8px; border-radius: 4px; background: rgba(255, 255, 255, 0.05); overflow: hidden; }
 .top-bar > div { height: 100%; border-radius: 4px; background: var(--accent); }
+.act-link { cursor: pointer; }
+.act-link:hover, .act-link:focus-visible { background: rgba(255, 255, 255, 0.03); }
