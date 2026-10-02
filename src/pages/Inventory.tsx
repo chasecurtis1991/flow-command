@@ -87,7 +87,7 @@ export function Inventory() {
   const [params, setParams] = useSearchParams();
   const tab = params.get("tab") === "fginv" ? "fginv" : "shopify";
   const setTab = (t: "shopify" | "fginv") => setParams(t === "fginv" ? { tab: "fginv" } : {}, { replace: true });
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(() => params.get("q") ?? "");
   const [lowOnly, setLowOnly] = useState(() => params.get("low") === "1"); // Home's Low stock card links here with ?low=1
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const lots = useLots();
@@ -103,6 +103,23 @@ export function Inventory() {
       setParams({}, { replace: true });
     }
   }, [action, inv.status, inv.store, store, openMove, setParams]);
+  // ?q= / ?low=1 deep links (assistant, Home), consumed also while the page is open; keeps ?tab.
+  useEffect(() => {
+    const pq = params.get("q"), low = params.get("low");
+    if (pq == null && low == null) return;
+    if (pq != null) setQ(pq);
+    if (low === "1") setLowOnly(true);
+    setParams(params.get("tab") === "fginv" ? { tab: "fginv" } : {}, { replace: true });
+  }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ?adjust=<variant gid> (assistant: "adjust Lifter 7g") opens the Adjust dialog for that variant.
+  const adjustParam = params.get("adjust");
+  useEffect(() => {
+    if (!adjustParam || inv.status !== "data" || inv.store !== store) return;
+    const v = inv.data?.variants.find((x) => x.id === adjustParam);
+    const p = v && groupInventory(inv.data!.variants).find((x) => x.id === v.productId);
+    if (v && p) setAdjusting({ p, v, storeId: store });
+    setParams({}, { replace: true });
+  }, [adjustParam, inv.status, inv.store, store]); // eslint-disable-line react-hooks/exhaustive-deps
   const onAdjust = useCallback((a: Adjusting) => { if (inv.store) setAdjusting({ ...a, storeId: inv.store }); }, [inv.store]);
 
   useEffect(() => {

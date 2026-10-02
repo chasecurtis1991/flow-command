@@ -202,7 +202,7 @@ function ordersPage(args: Record<string, unknown>): OrdersPage {
 const BIZ = /LLC|Co-op|Extracts|Apothecary|Wellness|Botanicals|Farms|Supply/;
 const cityState = (addr: string) => { const m = /^(.+), ([A-Z]{2}) \d+$/.exec(addr.split("\n").pop() ?? ""); return m ? `${m[1]}, ${m[2]}` : null; };
 function customers(args: Record<string, unknown>): CustomersResult {
-  const mine = new Set(storeOrders());
+  const mine = new Set(storeOrders(typeof args.storeId === "string" ? args.storeId : active));
   const by = new Map<string, Customer & { spent: number }>();
   orders.forEach((o, i) => {
     if (!mine.has(o)) return;
@@ -474,8 +474,8 @@ function splitVariant(args: Record<string, unknown>): SplitResult {
   splitResults.set(key, result);
   return result;
 }
-const catalog = (): CatalogResult => ({
-  products: catProducts.filter((p) => p.stores.includes(LETTER[active])).map(({ stores: _stores, ...p }) => p),
+const catalog = (store = active): CatalogResult => ({
+  products: catProducts.filter((p) => p.stores.includes(LETTER[store])).map(({ stores: _stores, ...p }) => p),
   truncated: false,
 });
 
@@ -645,7 +645,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "list_inventory": return inventory(typeof args.storeId === "string" ? args.storeId : active);
     case "adjust_inventory": return adjust(args);
     case "transfer_inventory": return transfer(args);
-    case "list_products": return catalog();
+    case "list_products": return catalog(typeof args.storeId === "string" ? args.storeId : active);
     case "prepare_variant_split": return splitPreview(args);
     case "split_product_variant": return splitVariant(args);
     case "release_variant_split": splitPlans.delete(String(args.planId)); return null;

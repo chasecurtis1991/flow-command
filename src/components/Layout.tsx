@@ -27,7 +27,7 @@ const focusToggle = (sel: string) => requestAnimationFrame(() => document.queryS
 
 export function Layout() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const orders = useOrders();
   const coas = useCoas(); // badge only; the Lab page loads it
 
@@ -112,6 +112,28 @@ export function Layout() {
     openPalette: () => setPalette(true), openSheet: openReceive, refresh,
   }), [store, setStore, storeReady, accent, density, toast, refresh, openReceive]);
 
+  // App chrome the voice assistant can drive ("go back", "close that", "collapse the sidebar", …).
+  const uiAction = (action: string): string => {
+    switch (action) {
+      case "go_back": navigate(-1); return "Went back.";
+      case "go_forward": navigate(1); return "Went forward.";
+      case "close_panel": {
+        const d = document.querySelector<HTMLDialogElement>("dialog[open]");
+        if (d) { d.dispatchEvent(new Event("cancel", { cancelable: true })); return "Closed the dialog."; }
+        if (palette) { setPalette(false); return "Closed the command palette."; }
+        const p = new URLSearchParams(search);
+        if (p.has("sel")) { p.delete("sel"); navigate(`${pathname}${p.size ? `?${p}` : ""}`, { replace: true }); return "Closed the detail panel."; }
+        return "Nothing is open to close.";
+      }
+      case "collapse_sidebar": setCollapsed(true); return "Collapsed the sidebar.";
+      case "expand_sidebar": setCollapsed(false); return "Expanded the sidebar.";
+      case "toggle_sidebar": setCollapsed((c) => !c); return "Toggled the sidebar.";
+      case "open_command_palette": setPalette(true); return "Opened the command palette.";
+      case "refresh": refresh(); return "Refreshing this screen from Shopify.";
+      case "hide_assistant": setAssistant(false); return "Hid the assistant panel; the conversation continues.";
+      default: return `Error: unknown action "${action}".`;
+    }
+  };
   const title = TITLES[pathname] ?? "Flow Command";
   const openCount = orders.status === "data" ? orders.orders.filter(isOpenFulfillment).length : 0;
   const unposted = coas.status === "data" ? coas.data!.coas.filter((c) => c.postedStatus === "unposted").length : 0; // no badge until loaded
@@ -213,7 +235,7 @@ export function Layout() {
             }}
           />
         )}
-        <AssistantPanel open={assistant} onClose={() => setAssistant(false)} />
+        <AssistantPanel open={assistant} onClose={() => setAssistant(false)} onUi={uiAction} />
       </div>
       </ConversationProvider>
     </AppContext.Provider>

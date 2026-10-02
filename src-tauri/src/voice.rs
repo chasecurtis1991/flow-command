@@ -31,7 +31,7 @@ pub struct VoiceConfig {
 }
 
 /// Increment when PROMPT, tool_defs() or the agent's model settings change.
-const SETUP_VERSION: u32 = 2;
+const SETUP_VERSION: u32 = 3;
 /// Lowest-latency TTS model for English agents.
 const TTS_MODEL: &str = "eleven_flash_v2";
 /// Fast tool-capable LLMs, best first; setup uses the first one ElevenLabs lists for this workspace (GET /v1/llm).
@@ -159,6 +159,7 @@ Rules:
 - Use the tools for every fact about orders, inventory, sales or customers. Never guess numbers or statuses. If a tool returns an error or nothing, say so plainly.
 - The current store, screen and selected record arrive as context updates; tools default to the current store unless the user names another one.
 - You cannot change anything yourself. For inventory changes call propose_inventory_adjustment; for order notes or tags call propose_order_update. These only show a review card in the app. Then tell the user to check the card and click Apply. Never say a change was made until the app tells you it was applied.
+- Navigation is hands-free: when the user asks to go to, open, show, pull up or switch to anything, call the matching tool right away without asking for confirmation (open_screen, switch_store, open_order, open_customer, open_product, open_inventory_item, open_coa, ui_action). Then confirm in a few words ("Here's R94244."). Refund, fulfill, notes, adjust and split actions only open a form; the user confirms in the app.
 - If a tool says a request is ambiguous (several matching items, locations or orders), ask a short question to narrow it down.
 - Tags are labels only: a tag is never an actual fulfillment hold.
 - Keep spoken replies short: lead with the answer, then at most one useful detail. Say money as dollars and cents and quantities as whole numbers. Read order names like "R 9 4 2 4 4"."#;
@@ -185,8 +186,37 @@ fn tool_defs() -> Vec<serde_json::Value> {
             serde_json::json!({ "order": { "type": "string", "description": "Order number, e.g. 'R94244' or '#R-10482'." }, "store": store }), &["order"]),
         tool("sales_summary", "Shopify's sales report: orders, gross, discounts, returns, net and total sales, average order, top products.",
             serde_json::json!({ "days": { "type": "integer", "description": "Number of days ending today (1 = today), up to 90." }, "store": { "type": "string", "enum": ["retail", "b2b", "bulk", "all"], "description": "Store or 'all'; omit for the open store." } }), &["days"]),
-        tool("open_screen", "Show a screen in the app, optionally searching for something on it.",
-            serde_json::json!({ "screen": { "type": "string", "enum": ["home", "orders", "inventory", "catalog", "lab", "customers", "analytics", "settings"], "description": "Which screen to show." }, "search": { "type": "string", "description": "Optional search text, e.g. a product or customer name." } }), &["screen"]),
+        tool("open_screen", "Show a screen, optionally with a view and a search. Views: orders all|unfulfilled; inventory shopify|fginv|low_stock|receive|transfer; catalog table|grid|drafts; lab table|calendar|labs|link|unposted; analytics 7|14|30|90 (days).",
+            serde_json::json!({
+                "screen": { "type": "string", "enum": ["home", "orders", "inventory", "catalog", "lab", "customers", "analytics", "settings"], "description": "Which screen to show." },
+                "view": { "type": "string", "description": "Optional view for that screen (see the tool description)." },
+                "search": { "type": "string", "description": "Optional search text (orders, inventory, catalog, lab, customers)." } }), &["screen"]),
+        tool("switch_store", "Switch the app to another store.",
+            serde_json::json!({ "store": { "type": "string", "enum": ["retail", "b2b", "bulk"], "description": "Store to switch to." } }), &["store"]),
+        tool("open_order", "Open one order: its detail panel, or straight into refund / fulfill / notes, its Shopify admin page, or its carrier tracking page.",
+            serde_json::json!({
+                "order": { "type": "string", "description": "Order number, e.g. 'R94244'." },
+                "action": { "type": "string", "enum": ["details", "refund", "fulfill", "notes", "shopify", "tracking"], "description": "What to open; default details." },
+                "store": store.clone() }), &["order"]),
+        tool("open_customer", "Open one customer: their detail panel, their Shopify admin page, or a new email to them.",
+            serde_json::json!({
+                "customer": { "type": "string", "description": "Customer name, email or company." },
+                "action": { "type": "string", "enum": ["details", "shopify", "email"], "description": "What to open; default details." },
+                "store": store.clone() }), &["customer"]),
+        tool("open_product", "Open one product: its catalog detail panel, its Shopify admin page, its page on the website, or Split variants.",
+            serde_json::json!({
+                "product": { "type": "string", "description": "Product title, e.g. 'Lifter'." },
+                "action": { "type": "string", "enum": ["details", "shopify", "online_store", "split_variants"], "description": "What to open; default details." },
+                "store": store.clone() }), &["product"]),
+        tool("open_inventory_item", "Show an item in Inventory, or open the Adjust stock dialog for it.",
+            serde_json::json!({
+                "item": { "type": "string", "description": "SKU, or product and variant, e.g. 'Lifter 7g'." },
+                "action": { "type": "string", "enum": ["show", "adjust"], "description": "Show it in the list, or open Adjust; default show." },
+                "store": store.clone() }), &["item"]),
+        tool("open_coa", "Open a certificate of analysis (COA) in Lab by batch, product or lab name.",
+            serde_json::json!({ "query": { "type": "string", "description": "Batch number, product or lab, e.g. 'FG-24-0918'." } }), &["query"]),
+        tool("ui_action", "Control the app itself.",
+            serde_json::json!({ "action": { "type": "string", "enum": ["go_back", "go_forward", "close_panel", "collapse_sidebar", "expand_sidebar", "toggle_sidebar", "open_command_palette", "refresh", "hide_assistant"], "description": "close_panel closes the open dialog or detail panel; refresh reloads the screen from Shopify." } }), &["action"]),
         tool("propose_inventory_adjustment", "Prepare (not apply) a stock change for one variant at one location. Shows a review card; the user applies it.",
             serde_json::json!({
                 "item": { "type": "string", "description": "SKU, or product and variant, e.g. 'Lifter 7g'." },
@@ -326,7 +356,7 @@ mod tests {
     #[test]
     fn tool_defs_are_well_formed() {
         let defs = tool_defs();
-        assert_eq!(defs.len(), 7);
+        assert_eq!(defs.len(), 14);
         for d in &defs {
             assert_eq!(d["type"], "client");
             assert!(d["expects_response"].as_bool().unwrap());

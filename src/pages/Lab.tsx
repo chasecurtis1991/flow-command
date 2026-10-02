@@ -3,7 +3,7 @@
 // Phase B: LLM parsing through OpenRouter (parse_coas; key + model in Settings). Phase C: the import wizard
 // (pages/CoaWizard.tsx — upload_coa_pdf / import_coa) and Repost (repost_coas). Phase D: the Google Drive / Sheet mirror
 // (google_mirror_coa — the wizard's toggle and the detail pane's Mirror to Google; config in Settings → Google).
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { prefs, useApp } from "../lib/app";
@@ -126,11 +126,15 @@ export function Lab() {
   const table = useTable<Coa>({ id: "coas", columns, rows: searched, defaultSort: { id: "expires", dir: "asc" } });
   const rows = table.rowsOut;
   const selected = sel ? all.find((c) => c.fileId === sel) ?? null : null;
+  // ?pick=1 with ?q= (assistant: "open the COA for batch FG-24-0918"): open the single match once COAs are loaded.
+  const pick = useRef(false);
+  useEffect(() => { if (pick.current && st.status === "data" && s) { pick.current = false; if (rows.length === 1) setSel(rows[0].fileId); } }, [st.status, s, rows]);
   const seg = (col: "state" | "posted", v: string) => table.setFilter(col, v === "all" ? null : [v]);
 
   // Deep links (⌘K palette, Home shortcut, KPI buttons): ?q=<text> prefills search, ?posted=unposted presets the filter; then drop them (keep ?view).
   useEffect(() => {
     if (!params.has("q") && !params.has("posted")) return;
+    if (params.get("pick") === "1") pick.current = true;
     const pq = params.get("q");
     if (pq != null) setQ(pq);
     if (params.get("posted") === "unposted") table.setFilter("posted", ["unposted"]);

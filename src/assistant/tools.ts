@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   ADJUST_REASONS, HIDDEN_INVENTORY, STORES, type InventoryResult, type InventoryVariant, type OrderDetail, type OrdersPage, type SalesReport, type StoreId,
-  fulStatus, getOrder, money, payStatus, storeById,
+  type CatalogProduct, type Customer, type CustomersResult, type CatalogResult, type FulfillmentInfo, adminUrl, fulStatus, getOrder, getProductDetail, money, payStatus, storeById,
 } from "../lib/shopify";
 
 export type Proposal = { id: string; storeId: StoreId; createdAt: number; status: "pending" | "applying" | "applied" | "failed" | "dismissed"; result?: string; error?: string } & (
@@ -13,7 +13,14 @@ export type Proposal = { id: string; storeId: StoreId; createdAt: number; status
 );
 export type NewProposal = Proposal extends infer P ? (P extends Proposal ? Omit<P, "id" | "createdAt" | "status"> : never) : never;
 
-export interface ToolContext { store: StoreId; go: (path: string) => void; propose: (p: NewProposal) => Proposal }
+export interface ToolContext {
+  store: StoreId; go: (path: string) => void; propose: (p: NewProposal) => Proposal;
+  setStore: (s: StoreId) => Promise<void>;
+  /** Opens an external URL (Shopify admin, storefront, tracking, mailto) in the default browser / app. */
+  open: (url: string) => void;
+  /** App chrome: back/forward, panels, sidebar, palette, refresh; returns what happened. */
+  ui: (action: string) => string;
+}
 type Args = Record<string, unknown>;
 
 const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
@@ -35,7 +42,7 @@ function inventory(store: StoreId): Promise<InventoryVariant[]> {
   return p;
 }
 export const preloadInventory = (store: StoreId) => { void inventory(store).catch(() => {}); };
-export const clearToolCache = () => invCache.clear();
+export const clearToolCache = () => { invCache.clear(); catCache.clear(); };
 /** Every word of the query must appear in "product variant sku" (so "lifter 7g" and "FG-LFT-7G" both work). */
 function matchVariants(all: InventoryVariant[], query: string): InventoryVariant[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -122,11 +129,154 @@ async function salesSummary(ctx: ToolContext, a: Args): Promise<string> {
 
 // ---- navigation ----
 const SCREENS = ["home", "orders", "inventory", "catalog", "lab", "customers", "analytics", "settings"];
+const SEARCHABLE = ["orders", "inventory", "catalog", "lab", "customers"];
+/** view → extra URL params per screen (each page reads these on load). */
+const VIEWS: Record<string, Record<string, Record<string, string>>> = {
+  orders: { all: { filter: "all" }, unfulfilled: { filter: "unfulfilled" } },
+  inventory: { shopify: {}, fginv: { tab: "fginv" }, low_stock: { low: "1" }, receive: { action: "receive" }, transfer: { action: "transfer" } },
+  catalog: { table: {}, grid: { view: "grid" }, drafts: { status: "draft" } },
+  lab: { table: {}, calendar: { view: "calendar" }, labs: { view: "labs" }, link: { view: "link" }, unposted: { posted: "unposted" } },
+  analytics: { "7": { days: "7" }, "14": { days: "14" }, "30": { days: "30" }, "90": { days: "90" } },
+};
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Switch the app's store when the target lives elsewhere (then let the pages settle before navigating). */
+async function goStore(ctx: ToolContext, store: StoreId) {
+  if (store === ctx.store) return "";
+  await ctx.setStore(store);
+  await sleep(80);
+  return `Switched to ${storeById(store).label}. `;
+}
+const qs = (o: Record<string, string>) => { const p = new URLSearchParams(o).toString(); return p ? `?${p}` : ""; };
+
 function openScreen(ctx: ToolContext, a: Args): string {
-  const screen = str(a.screen), q = str(a.search);
+  const screen = str(a.screen), q = str(a.search), view = str(a.view);
   if (!SCREENS.includes(screen)) return `Error: unknown screen "${screen}".`;
-  ctx.go(`/${screen}${q && screen === "catalog" ? `?q=${encodeURIComponent(q)}` : ""}`);
-  return `Opened ${screen}${q && screen === "catalog" ? `, searching "${q}"` : ""}.`;
+  const views = VIEWS[screen] ?? {};
+  if (view && !views[view]) return `Error: ${screen} has no "${view}" view${Object.keys(views).length ? ` (options: ${Object.keys(views).join(", ")})` : ""}.`;
+  const params: Record<string, string> = { ...(views[view] ?? {}) };
+  if (q && SEARCHABLE.includes(screen)) params.q = q;
+  ctx.go(`/${screen}${qs(params)}`);
+  return `Opened ${screen}${view ? ` (${view.replace("_", " ")})` : ""}${q && SEARCHABLE.includes(screen) ? `, searching "${q}"` : q ? ` (that screen has no search)` : ""}.`;
+}
+
+async function switchStore(ctx: ToolContext, a: Args): Promise<string> {
+  const target = STORES.find((s) => s.id === a.store);
+  if (!target) return "Error: store must be retail, b2b or bulk.";
+  if (target.id === ctx.store) return `Already on ${target.label}.`;
+  await ctx.setStore(target.id);
+  return `Switched to ${target.label}.`;
+}
+
+async function openOrder(ctx: ToolContext, a: Args): Promise<string> {
+  const store = storeOf(ctx, a.store), action = str(a.action) || "details";
+  const r = await resolveOrder(store, str(a.order));
+  if ("error" in r) return r.error;
+  if (action === "shopify") { ctx.open(adminUrl(store, r.id)); return "Opened the order in Shopify admin."; }
+  if (action === "tracking") {
+    const info = await invoke<FulfillmentInfo>("get_fulfillment", { storeId: store, orderId: r.id });
+    const t = [...info.shipments].reverse().flatMap((s) => s.tracking).find((x) => x.url);
+    if (!t?.url) return info.shipments.length ? "The shipments on this order have no tracking link." : "This order hasn't shipped yet, so there's no tracking.";
+    ctx.open(t.url);
+    return `Opened ${t.company ?? "the carrier"} tracking${t.number ? ` for ${t.number}` : ""}.`;
+  }
+  const open = { refund: "refund", fulfill: "fulfill", notes: "notes" }[action];
+  if (action !== "details" && !open) return "Error: action must be details, refund, fulfill, notes, shopify or tracking.";
+  const sw = await goStore(ctx, store);
+  ctx.go(`/orders${qs({ sel: r.id, ...(open ? { open } : {}) })}`);
+  return `${sw}Opened the order${open ? ` with the ${open === "notes" ? "notes editor" : `${open} form`} open — the user confirms it there` : ""}.`;
+}
+
+async function resolveCustomer(store: StoreId, raw: string): Promise<Customer | string> {
+  if (!raw) return "Error: say which customer.";
+  const r = await invoke<CustomersResult>("list_customers", { query: raw, first: 10, storeId: store });
+  const l = raw.toLowerCase();
+  const exact = r.customers.filter((c) => c.displayName.toLowerCase() === l || c.email?.toLowerCase() === l || c.company?.toLowerCase() === l);
+  const pick = exact.length === 1 ? exact[0] : r.customers.length === 1 ? r.customers[0] : null;
+  if (pick) return pick;
+  if (!r.customers.length) return `No customer in ${storeById(store).label} matches "${raw}".`;
+  return `Several customers match "${raw}": ${r.customers.slice(0, 6).map((c) => `${c.displayName}${c.email ? ` (${c.email})` : ""}`).join("; ")}. Ask which one.`;
+}
+
+async function openCustomer(ctx: ToolContext, a: Args): Promise<string> {
+  const store = storeOf(ctx, a.store), action = str(a.action) || "details";
+  const c = await resolveCustomer(store, str(a.customer));
+  if (typeof c === "string") return c;
+  if (action === "shopify") { ctx.open(adminUrl(store, c.id)); return `Opened ${c.displayName} in Shopify admin.`; }
+  if (action === "email") {
+    if (!c.email) return `${c.displayName} has no email address.`;
+    ctx.open(`mailto:${c.email}`);
+    return `Started an email to ${c.displayName}.`;
+  }
+  if (action !== "details") return "Error: action must be details, shopify or email.";
+  const sw = await goStore(ctx, store);
+  ctx.go(`/customers${qs({ sel: c.id })}`);
+  return `${sw}Opened ${c.displayName}.`;
+}
+
+// Catalog lists are a few Shopify pages; keep each store's for a minute like inventory.
+const catCache = new Map<StoreId, { at: number; p: Promise<CatalogProduct[]> }>();
+function catalog(store: StoreId): Promise<CatalogProduct[]> {
+  const hit = catCache.get(store);
+  if (hit && Date.now() - hit.at < INV_TTL) return hit.p;
+  const p = invoke<CatalogResult>("list_products", { storeId: store }).then((r) => r.products);
+  catCache.set(store, { at: Date.now(), p });
+  p.catch(() => catCache.delete(store));
+  return p;
+}
+async function resolveProduct(store: StoreId, raw: string): Promise<CatalogProduct | string> {
+  if (!raw) return "Error: say which product.";
+  const all = await catalog(store), l = raw.toLowerCase(), words = l.split(/\s+/).filter(Boolean);
+  const exact = all.filter((p) => p.title.toLowerCase() === l);
+  const hits = exact.length ? exact : all.filter((p) => words.every((w) => `${p.title} ${p.productType ?? ""} ${p.vendor ?? ""}`.toLowerCase().includes(w)));
+  if (hits.length === 1) return hits[0];
+  if (!hits.length) return `No product in ${storeById(store).label} matches "${raw}".`;
+  return `Several products match "${raw}": ${hits.slice(0, 6).map((p) => p.title).join("; ")}${hits.length > 6 ? "; …" : ""}. Ask which one.`;
+}
+
+async function openProduct(ctx: ToolContext, a: Args): Promise<string> {
+  const store = storeOf(ctx, a.store), action = str(a.action) || "details";
+  const p = await resolveProduct(store, str(a.product));
+  if (typeof p === "string") return p;
+  if (action === "shopify") { ctx.open(adminUrl(store, p.id)); return `Opened ${p.title} in Shopify admin.`; }
+  if (action === "online_store") {
+    const d = await getProductDetail(store, p.id);
+    if (!d.product.onlineStoreUrl) return `${p.title} isn't published on the online store.`;
+    ctx.open(d.product.onlineStoreUrl);
+    return `Opened ${p.title} on the website.`;
+  }
+  if (action === "split_variants" && p.variantCount < 2) return `${p.title} has only one variant, so there's nothing to split.`;
+  if (action !== "details" && action !== "split_variants") return "Error: action must be details, shopify, online_store or split_variants.";
+  const sw = await goStore(ctx, store);
+  ctx.go(`/catalog${qs({ sel: p.id, ...(action === "split_variants" ? { split: "1" } : {}) })}`);
+  return `${sw}Opened ${p.title}${action === "split_variants" ? " with Split variants open — the user reviews and creates the drafts" : ""}.`;
+}
+
+async function openInventoryItem(ctx: ToolContext, a: Args): Promise<string> {
+  const store = storeOf(ctx, a.store), action = str(a.action) || "show", item = str(a.item);
+  if (!item) return "Error: say which item.";
+  const hits = matchVariants(await inventory(store), item);
+  if (action === "adjust") {
+    const tracked = hits.filter((v) => v.tracked && v.inventoryItemId);
+    if (tracked.length !== 1) return tracked.length ? `Ambiguous: ${tracked.slice(0, 6).map((v) => `${label(v)}${v.sku ? ` (${v.sku})` : ""}`).join("; ")}. Ask which one.` : `No tracked item in ${storeById(store).label} matches "${item}".`;
+    const sw = await goStore(ctx, store);
+    ctx.go(`/inventory${qs({ adjust: tracked[0].id })}`);
+    return `${sw}Opened Adjust stock for ${label(tracked[0])} — the user enters the change and applies it.`;
+  }
+  if (!hits.length) return `No item in ${storeById(store).label} matches "${item}".`;
+  const sw = await goStore(ctx, store);
+  ctx.go(`/inventory${qs({ q: hits.length === 1 && hits[0].sku ? hits[0].sku : item })}`);
+  return `${sw}Showing ${hits.length === 1 ? label(hits[0]) : `${hits.length} matching items`} in Inventory.`;
+}
+
+function openCoa(ctx: ToolContext, a: Args): string {
+  const q = str(a.query);
+  if (!q) return "Error: say which COA (batch, product or lab).";
+  ctx.go(`/lab${qs({ q, pick: "1" })}`);
+  return `Searching COAs for "${q}"; a single match opens automatically.`;
+}
+
+function uiAction(ctx: ToolContext, a: Args): string {
+  return ctx.ui(str(a.action));
 }
 
 // ---- proposals (review cards; nothing is written here) ----
@@ -178,6 +328,13 @@ export function makeTools(ctx: () => ToolContext): Record<string, (a: Args) => P
     get_order: wrap(getOrderTool),
     sales_summary: wrap(salesSummary),
     open_screen: wrap(openScreen),
+    switch_store: wrap(switchStore),
+    open_order: wrap(openOrder),
+    open_customer: wrap(openCustomer),
+    open_product: wrap(openProduct),
+    open_inventory_item: wrap(openInventoryItem),
+    open_coa: wrap(openCoa),
+    ui_action: wrap(uiAction),
     propose_inventory_adjustment: wrap(proposeInventory),
     propose_order_update: wrap(proposeOrder),
   };

@@ -1152,8 +1152,8 @@ fn scope_denied(e: String, shop_domain: &str, scope: &str, what: &str) -> String
 
 // List every product in the active store's catalog (title-sorted; needs read_products)
 #[tauri::command]
-async fn list_products() -> Result<CatalogResult, String> {
-    let shop_domain = get_active_store()?.domain;
+async fn list_products(store_id: Option<String>) -> Result<CatalogResult, String> {
+    let shop_domain = domain_for(store_id)?;
 
     let (mut products, truncated) = fetch_catalog_pages(&shop_domain)
         .await
@@ -1235,8 +1235,8 @@ fn parse_customers(result: &serde_json::Value) -> Result<CustomersResult, String
 // `query` is Shopify search syntax; with a search we sort by relevance, otherwise newest activity first.
 // ponytail: no cursor paging — the UI says "search to narrow" past 100; add `after` if someone needs page 2.
 #[tauri::command]
-async fn list_customers(query: Option<String>, first: Option<i32>) -> Result<CustomersResult, String> {
-    let shop_domain = get_active_store()?.domain;
+async fn list_customers(query: Option<String>, first: Option<i32>, store_id: Option<String>) -> Result<CustomersResult, String> {
+    let shop_domain = domain_for(store_id)?;
     let query = query.as_deref().map(str::trim).filter(|q| !q.is_empty());
     let variables = serde_json::json!({
         "first": first.unwrap_or(CUSTOMERS_MAX_PAGE_SIZE).clamp(1, CUSTOMERS_MAX_PAGE_SIZE),

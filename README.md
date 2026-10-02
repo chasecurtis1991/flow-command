@@ -183,6 +183,16 @@ private "Flow Command" agent plus its 7 client tools in your ElevenLabs workspac
 type a question. The conversation keeps going while you change screens or hide the drawer (the Talk dot stays green);
 **End** stops it and releases the mic. The agent is told which screen, store and record you're on.
 
+**Hands-free navigation** — say where to go and it goes, no confirmation: any screen with a view or search ("FGINV
+tab", "catalog grid", "unfulfilled orders", "analytics for 30 days", "search customers for Ortega"); switch stores;
+open an order ("open R94244", "refund / fulfill / edit notes on R94244", "track R94244", "show R94244 in Shopify"), a
+customer (panel, Shopify, or a new email), a product (panel, Shopify, website page, Split variants), an inventory item
+(show it, or open Adjust stock), a COA by batch; and app controls ("go back", "close that", "collapse the sidebar",
+"open the command palette", "refresh", "hide the assistant"). Records in another store switch the app to that store
+first. Refund / fulfill / notes / adjust / split only open the form — you still confirm there. Every screen also
+accepts these as links (`?sel=`, `?q=`, `?open=refund|fulfill|notes`, `?filter=`, `?view=`, `?days=`, `?adjust=`,
+`?split=1`, `?pick=1`), including while it's already open.
+
 What it can do: look up stock (`find_inventory`), search orders (`find_orders`), read one order (`get_order` —
 spoken numbers like "R10482" match "#R-10482"), Shopify sales for a range (`sales_summary`), open a screen
 (`open_screen`). For changes it can only *propose*: `propose_inventory_adjustment` and `propose_order_update` put a

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useConversation } from "@elevenlabs/react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useApp } from "../lib/app";
 import {
   ADJUST_REASONS, adjustInventory, invalidateInventory, invalidateOrdersTable, storeById, updateOrderNoteTags, voiceSessionToken, voiceStatus, voiceTextSessionUrl,
@@ -13,8 +14,8 @@ type Msg = { id: string; at: number; role: "user" | "agent"; text: string };
 const reasonLabel = (r: string) => ADJUST_REASONS.find(([v]) => v === r)?.[1] ?? r;
 
 /** The assistant drawer. Must render inside <ConversationProvider>; stays mounted (and the session alive) while hidden. */
-export function AssistantPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { store } = useApp();
+export function AssistantPanel({ open, onClose, onUi }: { open: boolean; onClose: () => void; onUi: (action: string) => string }) {
+  const { store, setStore } = useApp();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const [setup, setSetup] = useState<VoiceStatus | null>(null);
@@ -52,9 +53,12 @@ export function AssistantPanel({ open, onClose }: { open: boolean; onClose: () =
     setProposals((ps) => [...ps, full]);
     return full;
   }, []);
-  const ctx = useRef<ToolContext>({ store, go: navigate, propose });
-  ctx.current = { store, go: navigate, propose };
+  const live = (): ToolContext => ({ store, go: navigate, propose, setStore, open: (u) => void openUrl(u), ui: onUi });
+  const ctx = useRef<ToolContext>(live());
+  ctx.current = live();
   const tools = useMemo(() => makeTools(() => ctx.current), []);
+  // Dev only: lets the browser preview drive the real tools + router without an ElevenLabs session.
+  if (import.meta.env.DEV) (window as unknown as { __assistantTools?: typeof tools }).__assistantTools = tools;
 
   // Keep the agent told where the user is (screen, store, selected record).
   const sel = new URLSearchParams(search).get("sel");

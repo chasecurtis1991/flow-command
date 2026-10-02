@@ -8,7 +8,7 @@ const nice = (s: string) => s.charAt(0) + s.slice(1).toLowerCase().replace(/_/g,
 const tone = (s: string) => (s === "DELIVERED" ? "green" : s === "FAILURE" || s === "CANCELLED" || s === "ERROR" ? "red" : "neutral");
 
 /** Shipments (usually created by ShipStation) plus a manual Fulfill for orders shipped outside it. */
-export function OrderFulfillment({ store, orderId, onChanged }: { store: StoreId; orderId: string; onChanged: () => void }) {
+export function OrderFulfillment({ store, orderId, onChanged, autoOpen = 0 }: { store: StoreId; orderId: string; onChanged: () => void; autoOpen?: number }) {
   const [info, setInfo] = useState<FulfillmentInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -22,6 +22,10 @@ export function OrderFulfillment({ store, orderId, onChanged }: { store: StoreId
   }, [store, orderId, reloadKey]);
 
   const ready = fulfillable(info);
+  // ?open=fulfill (autoOpen is a fresh number per command): open the form once the data is in, if anything is left to ship.
+  const auto = useRef(0);
+  useEffect(() => { if (autoOpen) auto.current = autoOpen; }, [autoOpen]);
+  useEffect(() => { if (auto.current && info) { auto.current = 0; if (fulfillable(info).length) setOpen(true); } }, [info, autoOpen]);
   return (
     <div className="detail-section">
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
