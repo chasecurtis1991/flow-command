@@ -141,11 +141,15 @@ item are loaded. Shopify is treated as the owner of these counts until FGINV has
 variant or SKU, enter quantities, and review each line's available count before → after.
 - **Receive** adds units at one location with reason *Received*. An optional lot / PO / supplier reference is stored
   as Shopify's `referenceDocumentUri` (`flowcommand://receive/<ref>`) so it shows in the item's inventory history.
-- **Transfer** moves units from one location to another: each item becomes −N at the source and +N at the
-  destination (reason *Correction*, reference `flowcommand://transfer/T-YYYYMMDD-HHMM`). You can't move more than is
-  available at the source. Stores with a single location (Retail: Flow NC) say there's nowhere to transfer to.
+- **Transfer** creates a real Shopify Transfer (admin → Products → Transfers; needs `write_inventory_transfers`,
+  `write_inventory_shipments`, `write_inventory_shipments_received_items`). **Move now** creates it, ships it and
+  receives it at the destination in one go; **In transit** (optional carrier + tracking) leaves it for the destination
+  to receive in Shopify when it arrives. You can't move more than is available at the source. Each step carries an
+  idempotency key and checks what already exists, so if a step fails, **Retry** finishes the same transfer instead
+  of creating another. The result links to the transfer in Shopify. Stores with a single location (Retail: Flow NC)
+  say there's nowhere to transfer to.
 
-Every line of a request goes in **one** `inventoryAdjustQuantities` call, so Shopify applies all of it or none, with
+Receive sends every line in **one** `inventoryAdjustQuantities` call, so Shopify applies all of it or none, with
 the same compare-and-swap counts and idempotency key as Adjust. Items must already be stocked at the chosen location(s).
 The old FGINV "Receive lot" sheet (sample data only) is gone.
 

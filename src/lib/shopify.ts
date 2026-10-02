@@ -323,6 +323,13 @@ export interface AdjustRequest {
 export interface LevelAfter { inventoryItemId: string; locationId: string; available: number; onHand: number }
 /** All changes go in one Shopify mutation: all apply or none do. Returns Shopify's re-read counts, one per change. */
 export const adjustInventory = (request: AdjustRequest) => invoke<LevelAfter[]>("adjust_inventory", { request });
+/** Mirrors inventory_transfer.rs: a Shopify Transfer (create → ship → receive). Retrying with the same key resumes it. */
+export interface TransferRequest {
+  storeId: StoreId; originLocationId: string; destinationLocationId: string; lines: { inventoryItemId: string; quantity: number }[];
+  reference?: string; note?: string; receiveNow: boolean; trackingCompany?: string; trackingNumber?: string; idempotencyKey: string;
+}
+export interface TransferResult { transferId: string; name: string; status: string; received: boolean; levels: LevelAfter[] }
+export const transferInventory = (request: TransferRequest) => invoke<TransferResult>("transfer_inventory", { request });
 /** Location name → id, from the levels list_inventory returned (locations with nothing stocked don't appear). */
 export function inventoryLocations(variants: InventoryVariant[]): { id: string; name: string }[] {
   const by = new Map<string, string>();
@@ -817,7 +824,7 @@ export function swatchColor(seed: string): string {
 export const isScopeError = (e: string | null | undefined, scope = "read_products") => new RegExp(`${scope}|access denied`, "i").test(e ?? "");
 
 /** Deep link into Shopify admin for an Order / Product / Customer GID (gid://shopify/<Type>/<id>); other types land on the admin root. */
-const ADMIN_SEGMENT: Record<string, string> = { Order: "orders", Product: "products", Customer: "customers" };
+const ADMIN_SEGMENT: Record<string, string> = { Order: "orders", Product: "products", Customer: "customers", InventoryTransfer: "transfers" };
 export const adminUrl = (store: StoreId, gid: string) => {
   const root = `https://admin.shopify.com/store/${storeById(store).domain.replace(".myshopify.com", "")}`;
   const [, type = "", id] = /^gid:\/\/shopify\/(\w+)\/(\d+)/.exec(gid) ?? [];

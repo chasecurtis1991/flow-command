@@ -277,6 +277,23 @@ function adjust(a: Record<string, unknown>) {
   for (const { v, l, c } of targets) { l.available += c.delta; l.onHand += c.delta; v.available += c.delta; }
   return targets.map(({ l, c }) => ({ inventoryItemId: c.inventoryItemId, locationId: c.locationId, available: l.available, onHand: l.onHand }));
 }
+/** Browser-preview Shopify Transfer: Move now moves the units; In transit only takes them out of the origin. */
+let transferSeq = 1;
+function transfer(a: Record<string, unknown>) {
+  const r = a.request as { originLocationId: string; destinationLocationId: string; lines: { inventoryItemId: string; quantity: number }[]; receiveNow: boolean };
+  const at = (item: string, loc: string) => invVariants.find((v) => v.inventoryItemId === item)?.levels.find((l) => l.locationId === loc);
+  for (const l of r.lines) if (!at(l.inventoryItemId, r.originLocationId) || !at(l.inventoryItemId, r.destinationLocationId)) throw new Error("An item isn't stocked at one of the locations — stock it there in Shopify first.");
+  for (const l of r.lines) {
+    const v = invVariants.find((x) => x.inventoryItemId === l.inventoryItemId)!, o = at(l.inventoryItemId, r.originLocationId)!, d = at(l.inventoryItemId, r.destinationLocationId)!;
+    o.available -= l.quantity; o.onHand -= l.quantity; v.available -= l.quantity;
+    if (r.receiveNow) { d.available += l.quantity; d.onHand += l.quantity; v.available += l.quantity; }
+  }
+  const n = transferSeq++;
+  return {
+    transferId: `gid://shopify/InventoryTransfer/${n}`, name: `#T${String(n).padStart(4, "0")}`, status: r.receiveNow ? "TRANSFERRED" : "IN_PROGRESS", received: r.receiveNow,
+    levels: r.lines.flatMap((l) => [r.originLocationId, r.destinationLocationId].map((loc) => { const x = at(l.inventoryItemId, loc)!; return { inventoryItemId: l.inventoryItemId, locationId: loc, available: x.available, onHand: x.onHand }; })),
+  };
+}
 const inventory = (): InventoryResult => ({
   variants: invVariants.filter((v) => active === "retail" || (active === "b2b" ? v.variantTitle?.includes("lb") : v.productTitle.includes("biomass"))),
   locations: INV_LOCS, levelsError: null, truncated: false,
@@ -547,7 +564,7 @@ const googleMirror = (req: { fileUrl: string | null }): MirrorResult => ({
   sheet: { ok: true, skipped: null, action: "updated", rowNumber: 335, tab: "COAs", matchedFields: ["batch", "productName", "lab", "issued", "expires", "thca", "cbd", "cbg", "totalCannabinoids", "shopifyUrl", "posted", "importedAt"], chip: "chip", error: null },
 });
 
-const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
+const DELAY: Record<string, number> = { list_orders: 500, list_orders_page: 500, list_inventory: 400, transfer_inventory: 900, get_fulfillment: 300, get_refund_info: 300, preview_refund: 250, create_refund: 700, fulfill_order: 600, update_order_note_tags: 500, adjust_inventory: 500, list_products: 400, list_customers: 400, list_orders_since: 350, list_product_presence: 300, list_coas: 500, parse_coas: 1200, upload_coa_pdf: 800, import_coa: 600, repost_coas: 400, google_status: 500, google_mirror_coa: 700 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
   await wait(DELAY[cmd] ?? 180);
@@ -572,6 +589,7 @@ async function invoke(cmd: string, args: Record<string, unknown> = {}): Promise<
     case "fulfill_order": return fulfill(args);
     case "list_inventory": return inventory();
     case "adjust_inventory": return adjust(args);
+    case "transfer_inventory": return transfer(args);
     case "list_products": return catalog();
     case "prepare_variant_split": return splitPreview(args);
     case "split_product_variant": return splitVariant(args);
