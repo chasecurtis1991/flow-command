@@ -308,9 +308,13 @@ opens it on that one COA. Library rows skip the upload leg.
    Linking is optional; only linked COAs get the product's `custom.coa_records` entry.
 4. **Import** — **Post to flowgardens.com/pages/coa** (default on) then **Import N COAs** runs `import_coa` per row and
    shows a ✓/✗ chip per step: `terpenes` (names mapped to the terpene library; unknown ones are listed in amber),
-   `coa_record` (metaobject, `ACTIVE` when posting, `DRAFT` when not), `product link` (`custom.coa_records` on the
-   linked product), `/pages/coa` (the theme template block — a backup of the template is saved under the app data
-   dir before every write; skipped when posting is off) and `cache` (the parsed-fields cache). The Done panel says
+   `coa_record` (metaobject, `ACTIVE` when posting, `DRAFT` when not), `product link`
+   (`custom.coa_records` on the linked product), `potency` (the product's `total_thca` / `total_cbd` / `total_cbg` from
+   the COA's THCa / CBDa / CBGa % — a value under 1.00 is cleared so it shows blank — plus `thca_range` and the top-3
+   detected `top_terpenes`; only when posting and when this is the newest COA linked to it; hover the chip for why it
+   was skipped), `/pages/coa` (the theme template block — a backup of the template is saved under the app data
+   dir before every write; skipped when posting is off) and `cache` (the parsed-fields cache). Cannabinoid percentages
+   are rounded to the hundredth everywhere — the COAs list, the coa_record and the product metafields. The Done panel says
    `Imported N · M failed`; **Close** re-pulls the list and toasts.
 
 **Repost to /pages/coa** (detail pane) re-writes just that COA's block on the public page via `repost_coas` (toast

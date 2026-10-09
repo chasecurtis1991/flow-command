@@ -30,7 +30,7 @@ const TABLE_MIN = { minWidth: 1220 };
 
 /** Shopify appends `_<uuid>` to uploaded file names; hide it in the table (the full name is the title / detail line). */
 const baseName = (f: string) => f.replace(/_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?=\.\w+$)/i, "");
-const pct = (n: number | null) => (n == null ? "—" : n.toFixed(1));
+const pct = (n: number | null) => (n == null ? "—" : n.toFixed(2));
 const stamp = () => new Date().toISOString().slice(0, 10);
 /** One value picked in an enum filter reads back as the seg selection; none → "all", several → nothing highlighted. */
 const segValue = (v: FilterValue | undefined) => (v == null ? "all" : Array.isArray(v) && v.length === 1 ? v[0] : "");
@@ -43,7 +43,7 @@ const postedPill = (c: Coa) => (
 // CSV export — one row per table row, RFC-4180 escaping (ported from the old dashboard minus Stores / Lab result ID).
 const CSV_COLUMNS: [string, (c: Coa) => unknown][] = [
   ["File", (c) => c.fileName], ["Owner", (c) => c.producer], ["Batch", (c) => c.batch], ["Product", (c) => c.productName], ["Lab", (c) => c.lab],
-  ["THCa %", (c) => c.thca], ["CBDa %", (c) => c.cbd], ["CBG %", (c) => c.cbg], ["Total cannabinoids %", (c) => c.totalCannabinoids],
+  ["THCa %", (c) => c.thca], ["CBDa %", (c) => c.cbd], ["CBGa %", (c) => c.cbg], ["Total cannabinoids %", (c) => c.totalCannabinoids],
   ["Issued", (c) => c.issued], ["Expires", (c) => c.expires], ["Days to expire", (c) => c.daysToExpire], ["State", (c) => c.state], ["Posted", (c) => c.postedStatus],
   ["File URL", (c) => c.fileUrl],
 ];
@@ -366,7 +366,7 @@ function CoaDetail({ c, onRelink, onImport, reparse }: { c: Coa; onRelink: () =>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
           {field("THCa %", <Edit c={c} field="thca" num save={save} />)}
           {field("CBDa %", <Edit c={c} field="cbd" num save={save} />)}
-          {field("CBG %", <Edit c={c} field="cbg" num save={save} />)}
+          {field("CBGa %", <Edit c={c} field="cbg" num save={save} />)}
           {field("Total %", <Edit c={c} field="totalCannabinoids" num save={save} />)}
         </div>
       </div>
@@ -588,7 +588,7 @@ function LabsView({ coas, onPick }: { coas: Coa[]; onPick: (lab: string) => void
             <span className="ellip" style={{ fontWeight: 500, color: l.name ? "var(--text)" : "var(--mute)" }}>{l.name || "— unattributed —"}</span>
             <span className="r">{l.total}</span>
             <span className="r" style={{ color: l.parsed >= 80 ? "var(--green)" : l.parsed >= 50 ? "var(--amber)" : "var(--mute)" }}>{l.parsed}%</span>
-            <span className="r">{l.avgThca != null ? `${l.avgThca.toFixed(1)}%` : "—"}</span>
+            <span className="r">{l.avgThca != null ? `${l.avgThca.toFixed(2)}%` : "—"}</span>
             <span className="sub">{l.earliest ? fmtDate(l.earliest) : "—"}</span>
             <span className="sub">{l.latest ? fmtDate(l.latest) : "—"}</span>
             <span><Spark data={l.spark} /></span>
@@ -636,7 +636,7 @@ function LinkView({ coas }: { coas: Coa[] }) {
                       <span className={`check${on ? " on" : ""}`} />
                       <span className="two-line grow">
                         <span className="ellip" style={{ fontWeight: 500 }}>{baseName(c.fileName)}</span>
-                        <span className="second ellip">{c.lab ?? "—"} · issued {fmtDate(c.issued)}{c.thca != null && ` · THCa ${c.thca.toFixed(1)}%`}</span>
+                        <span className="second ellip">{c.lab ?? "—"} · issued {fmtDate(c.issued)}{c.thca != null && ` · THCa ${c.thca.toFixed(2)}%`}</span>
                       </span>
                       <Pill kind={stt.kind} sm>{stt.label}</Pill>
                       <span className="icon-btn" role="button" title="Open PDF" onClick={(e) => { e.stopPropagation(); void openUrl(c.fileUrl); }}>{"↗"}</span>
