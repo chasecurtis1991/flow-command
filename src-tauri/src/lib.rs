@@ -2122,18 +2122,22 @@ fn build_coas(
             let thca = num_of(&ov["thca"])
                 .or_else(|| num_of(&parsed["thca_percent"]))
                 .or_else(|| rec_num("thca_percent"))
-                .or_else(|| prod_num(|p| p.thca.as_deref()));
+                .or_else(|| prod_num(|p| p.thca.as_deref()))
+                .map(round2);
             let cbd = num_of(&ov["cbd"])
                 .or_else(|| num_of(&parsed["cbda_percent"]))
                 .or_else(|| rec_num("cbd_percent"))
-                .or_else(|| prod_num(|p| p.cbd.as_deref()));
+                .or_else(|| prod_num(|p| p.cbd.as_deref()))
+                .map(round2);
             let cbg = num_of(&ov["cbg"])
                 .or_else(|| num_of(&parsed["cbg_percent"]))
                 .or_else(|| rec_num("cbg_percent"))
-                .or_else(|| prod_num(|p| p.cbg.as_deref()));
+                .or_else(|| prod_num(|p| p.cbg.as_deref()))
+                .map(round2);
             let total_cannabinoids = num_of(&ov["totalCannabinoids"])
                 .or_else(|| num_of(&parsed["total_cannabinoids_percent"]))
-                .or_else(|| rec_num("total_cannabinoids"));
+                .or_else(|| rec_num("total_cannabinoids"))
+                .map(round2);
 
             let terpenes = if ov["terpenes"].is_array() {
                 parse_terpenes(&ov["terpenes"], "pct")
@@ -2371,13 +2375,13 @@ thca_percent:
   Do NOT use "Total THC" or "Δ9-THC" — those are different compounds.
 
 cbda_percent:
-  Look for rows labeled: CBDa, CBDA, CBD-A, Cannabidiolic Acid, CBD Acid.
-  If the table has a row simply labeled "CBD" (not "Total CBD") in a list of individual cannabinoids alongside THCa, CBDa etc., use that value — many labs omit the "a" suffix.
+  Use the row labeled: CBDa, CBDA, CBD-A, Cannabidiolic Acid, CBD Acid.
+  Only if the table has NO CBDa row, use a row labeled simply "CBD" (some labs omit the "a" suffix). When both rows exist, always take CBDa.
   Do NOT use "Total CBD" (a calculated sum) for this field.
 
 cbg_percent:
-  Look for rows labeled: CBGa, CBGA, CBG-A, Cannabigerolic Acid, CBG Acid.
-  If the table has a row simply labeled "CBG" (not "Total CBG") in a list of individual cannabinoids, use that value.
+  Use the row labeled: CBGa, CBGA, CBG-A, Cannabigerolic Acid, CBG Acid.
+  Only if the table has NO CBGa row, use a row labeled simply "CBG". When both rows exist, always take CBGa (e.g. CBGa 0.387 and CBG 0.026 → 0.387).
   Do NOT use "Total CBG".
 
 total_cannabinoids_percent:
@@ -2687,7 +2691,10 @@ const PRODUCT_COA_RECORDS_QUERY: &str = r#"
 query ProductCoaRecords($id: ID!) {
     product(id: $id) {
         id
-        metafield(namespace: "custom", key: "coa_records") { id value }
+        metafield(namespace: "custom", key: "coa_records") {
+            id value
+            references(first: 50) { nodes { ... on Metaobject { id date: field(key: "report_date") { value } } } }
+        }
         flowerType: metafield(namespace: "custom", key: "flower_type") { value }
         strainType: metafield(namespace: "custom", key: "strain_type") { value }
         category: metafield(namespace: "custom", key: "product_category") { value }
@@ -2700,6 +2707,15 @@ mutation MetafieldsSet($metafields: [MetafieldsSetInput!]!) {
     metafieldsSet(metafields: $metafields) {
         metafields { id namespace key type value }
         userErrors { field message code }
+    }
+}
+"#;
+
+const METAFIELDS_DELETE_MUTATION: &str = r#"
+mutation MetafieldsDelete($metafields: [MetafieldIdentifierInput!]!) {
+    metafieldsDelete(metafields: $metafields) {
+        deletedMetafields { key }
+        userErrors { field message }
     }
 }
 "#;
@@ -2840,6 +2856,12 @@ pub struct RepostResult {
 /// Trimmed copy of an optional string; None when missing or blank.
 fn opt_text(v: &Option<String>) -> Option<String> {
     v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
+/// Cannabinoid % to the nearest hundredth — what the app shows and what lands in Shopify. Scaled via
+/// 9-place text first so 1.255 (stored as 1.25499…) rounds half-up to 1.26 like on paper.
+fn round2(n: f64) -> f64 {
+    format!("{:.9}", n * 100.0).parse::<f64>().unwrap_or(n * 100.0).round() / 100.0
 }
 
 /// `name` without a trailing `.pdf` (any case).
@@ -3196,10 +3218,18 @@ fn canonical_flower_type(v: &str) -> Option<&'static str> {
     })
 }
 
+struct ProductLink {
+    total: usize,
+    /// Canonical flower type + category feed the Google Sheet row.
+    flower_type: Option<&'static str>,
+    category: Option<String>,
+    /// report_date of an already-linked COA newer than this one; the product's potency then stays put.
+    newer: Option<String>,
+}
+
 /// Appends the metaobject to the product's custom.coa_records (read-modify-write: products
-/// accumulate COAs over time). Returns (list length afterwards, canonical flower type, category);
-/// the last two feed the Google Sheet row.
-async fn link_product_coa(product_id: &str, metaobject_id: &str) -> Result<(usize, Option<&'static str>, Option<String>), String> {
+/// accumulate COAs over time).
+async fn link_product_coa(product_id: &str, metaobject_id: &str, issued: &str) -> Result<ProductLink, String> {
     let r = graphql_request(SHOP_RETAIL, PRODUCT_COA_RECORDS_QUERY, Some(serde_json::json!({ "id": product_id }))).await?;
     let product = &r["data"]["product"];
     if !product.is_object() {
@@ -3209,6 +3239,15 @@ async fn link_product_coa(product_id: &str, metaobject_id: &str) -> Result<(usiz
         .or_else(|| non_empty(&product["strainType"]["value"]))
         .and_then(|v| canonical_flower_type(&v));
     let category = non_empty(&product["category"]["value"]);
+    // YYYY-MM-DD strings order lexically.
+    let newer = product["metafield"]["references"]["nodes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|n| n["id"].as_str() != Some(metaobject_id))
+        .filter_map(|n| non_empty(&n["date"]["value"]))
+        .filter(|d| d.as_str() > issued)
+        .max();
     let mut current: Vec<String> =
         product["metafield"]["value"].as_str().and_then(|v| serde_json::from_str(v).ok()).unwrap_or_default();
     if !current.iter().any(|id| id == metaobject_id) {
@@ -3225,7 +3264,75 @@ async fn link_product_coa(product_id: &str, metaobject_id: &str) -> Result<(usiz
         .await
         .map_err(|e| scope_denied(e, SHOP_RETAIL, "write_products", "product metafield"))?;
     check_user_errors(&r["data"]["metafieldsSet"]["userErrors"], "metafieldsSet")?;
-    Ok((current.len(), flower_type, category))
+    Ok(ProductLink { total: current.len(), flower_type, category, newer })
+}
+
+/// The custom.thca_range choice (the definition allows exactly these four).
+fn thca_range(thca: f64) -> &'static str {
+    match thca {
+        t if t >= 30.0 => "30%+",
+        t if t >= 25.0 => "25-30%",
+        t if t >= 20.0 => "20-25%",
+        _ => "Under 20%",
+    }
+}
+
+/// The product's potency metafields from the reviewed COA, shaped to the live definitions:
+/// total_thca ← THCa %, total_cbd ← CBD(a) %, total_cbg ← CBG(a) % (number_decimal 0–100, to the
+/// hundredth), thca_range, and top_terpenes = the 3 highest-% library terpenes. Returns (metafields
+/// to set, cannabinoid keys to clear): Chase's rule is that a % under 1.00 shows blank. Values the
+/// COA lacks are left alone.
+fn potency_metafields(product_id: &str, f: &ImportFields, profile: &[serde_json::Value]) -> (Vec<serde_json::Value>, Vec<&'static str>) {
+    let pct = |v: Option<f64>| v.filter(|n| n.is_finite() && (0.0..=100.0).contains(n)).map(round2);
+    let mf = |key: &str, kind: &str, value: String| {
+        serde_json::json!({ "ownerId": product_id, "namespace": "custom", "key": key, "type": kind, "value": value })
+    };
+    let (mut out, mut clear) = (Vec::new(), Vec::new());
+    for (key, v) in [("total_thca", f.thca_percent), ("total_cbd", f.cbd_percent), ("total_cbg", f.cbg_percent)] {
+        match pct(v) {
+            Some(n) if n >= 1.0 => out.push(mf(key, "number_decimal", n.to_string())),
+            Some(_) => clear.push(key),
+            None => {}
+        }
+    }
+    if let Some(t) = pct(f.thca_percent) {
+        out.push(mf("thca_range", "single_line_text_field", thca_range(t).to_string()));
+    }
+    // Highest % first; rows without a % (ND / <LOQ) were not detected, so they never count.
+    let mut terps: Vec<(&str, f64)> =
+        profile.iter().filter_map(|t| Some((t["terpene_id"].as_str()?, t["pct"].as_f64().filter(|p| *p > 0.0)?))).collect();
+    terps.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let mut top: Vec<&str> = Vec::new();
+    for (id, _) in terps {
+        if top.len() < 3 && !top.contains(&id) {
+            top.push(id);
+        }
+    }
+    if !top.is_empty() {
+        out.push(mf("top_terpenes", "list.metaobject_reference", serde_json::json!(top).to_string()));
+    }
+    (out, clear)
+}
+
+async fn set_potency_metafields(product_id: &str, f: &ImportFields, profile: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+    let (metafields, clear) = potency_metafields(product_id, f, profile);
+    if metafields.is_empty() && clear.is_empty() {
+        return Ok(serde_json::json!({ "skipped": "no potency values on this COA" }));
+    }
+    let denied = |e| scope_denied(e, SHOP_RETAIL, "write_products", "product metafield");
+    if !metafields.is_empty() {
+        let r = graphql_request(SHOP_RETAIL, METAFIELDS_SET_MUTATION, Some(serde_json::json!({ "metafields": metafields }))).await.map_err(denied)?;
+        check_user_errors(&r["data"]["metafieldsSet"]["userErrors"], "metafieldsSet")?;
+    }
+    if !clear.is_empty() {
+        let ids: Vec<_> = clear.iter().map(|k| serde_json::json!({ "ownerId": product_id, "namespace": "custom", "key": k })).collect();
+        let r = graphql_request(SHOP_RETAIL, METAFIELDS_DELETE_MUTATION, Some(serde_json::json!({ "metafields": ids }))).await.map_err(denied)?;
+        check_user_errors(&r["data"]["metafieldsDelete"]["userErrors"], "metafieldsDelete")?;
+    }
+    let mut detail: serde_json::Map<_, _> =
+        metafields.iter().map(|m| (m["key"].as_str().unwrap_or_default().to_string(), m["value"].clone())).collect();
+    detail.extend(clear.iter().map(|k| (k.to_string(), serde_json::json!("cleared (under 1%)"))));
+    Ok(serde_json::Value::Object(detail))
 }
 
 // -- /pages/coa template -----------------------------------------------------------------------
@@ -3359,9 +3466,13 @@ fn record_step(steps: &mut Vec<ImportStep>, step: &str, critical: bool, outcome:
 // Orchestrated import (the old POST /api/coas/import minus the Google legs). Every step is recorded
 // so the wizard can show ✓/✗ per leg and retry one; only `metaobject` is critical and stops the run.
 #[tauri::command]
-async fn import_coa(app: tauri::AppHandle, req: ImportRequest) -> Result<ImportResult, String> {
+async fn import_coa(app: tauri::AppHandle, mut req: ImportRequest) -> Result<ImportResult, String> {
     if req.file_id.trim().is_empty() {
         return Err("fileId is required".to_string());
+    }
+    let pcts = &mut req.fields;
+    for v in [&mut pcts.thca_percent, &mut pcts.cbd_percent, &mut pcts.cbg_percent, &mut pcts.total_cannabinoids_percent] {
+        *v = v.map(round2);
     }
     let f = &req.fields;
     let batch_id = opt_text(&f.batch_id)
@@ -3408,19 +3519,35 @@ async fn import_coa(app: tauri::AppHandle, req: ImportRequest) -> Result<ImportR
 
     // 3. Product link, mirrored into __manualLinks so list_coas joins the file immediately.
     if let Some(pid) = opt_text(&req.product_id) {
-        let outcome = async {
-            let (total, flower_type, category) = link_product_coa(&pid, &metaobject.id).await?;
-            let title = opt_text(&req.product_title).unwrap_or_else(|| pid.clone());
-            save_coa_link(app.clone(), req.file_id.clone(), Some(pid.clone()), Some(title)).await?;
-            // flowerType/category ride along so the wizard can carry them into the Google Sheet row.
-            Ok::<_, String>(serde_json::json!({ "linked": pid, "totalRecords": total, "flowerType": flower_type, "category": category }))
-        }
-        .await;
+        let link = link_product_coa(&pid, &metaobject.id, &issued).await;
+        let outcome = match &link {
+            Ok(l) => {
+                let title = opt_text(&req.product_title).unwrap_or_else(|| pid.clone());
+                // flowerType/category ride along so the wizard can carry them into the Google Sheet row.
+                save_coa_link(app.clone(), req.file_id.clone(), Some(pid.clone()), Some(title)).await.map(|()| {
+                    serde_json::json!({ "linked": pid, "totalRecords": l.total, "flowerType": l.flower_type, "category": l.category })
+                })
+            }
+            Err(e) => Err(e.clone()),
+        };
         record_step(&mut steps, "productLink", false, outcome);
         tokio::time::sleep(IMPORT_MUTATION_GAP).await;
+
+        // 4. Potency metafields (THCa/CBD/CBG %, THCa range, top terpenes) — only when posting (a DRAFT
+        // import changes nothing customers see) and only from the newest linked COA, so back-filling
+        // an old report can't roll the product page back.
+        if let Ok(l) = link {
+            let outcome = match l.newer {
+                _ if !req.post => Ok(serde_json::json!({ "skipped": "not posting — product page left alone" })),
+                Some(d) => Ok(serde_json::json!({ "skipped": format!("a newer COA ({d}) is already linked") })),
+                None => set_potency_metafields(&pid, f, &profile).await,
+            };
+            record_step(&mut steps, "potency", false, outcome);
+            tokio::time::sleep(IMPORT_MUTATION_GAP).await;
+        }
     }
 
-    // 4. /pages/coa block — what customers actually see; the metaobject is the structured truth.
+    // 5. /pages/coa block — what customers actually see; the metaobject is the structured truth.
     if req.post {
         let page_name = opt_text(&req.page_name)
             .or_else(|| opt_text(&req.product_title))
@@ -3434,7 +3561,7 @@ async fn import_coa(app: tauri::AppHandle, req: ImportRequest) -> Result<ImportR
         tokio::time::sleep(IMPORT_MUTATION_GAP).await;
     }
 
-    // 5. The reviewed fields are authoritative now: cache them so list_coas shows them without a re-parse.
+    // 6. The reviewed fields are authoritative now: cache them so list_coas shows them without a re-parse.
     let outcome = with_coa_cache(&app, true, |cache| {
         cache[req.file_id.as_str()] = serde_json::json!({
             "parsedAt": utc_now_iso(),
@@ -4754,7 +4881,7 @@ mod tests {
         assert_eq!(m.state, "valid");
         assert_eq!(m.lab.as_deref(), Some("FESA Lab")); // parsed beats coa_record.lab_name
         assert_eq!(m.thca, Some(31.5)); // parsed beats product 22.5
-        assert_eq!(m.cbg, Some(0.117)); // parsed null → coa_record
+        assert_eq!(m.cbg, Some(0.12)); // parsed null → coa_record 0.117, to the hundredth
         assert_eq!(m.total_cannabinoids, Some(32.58)); // numeric string
         assert_eq!(m.cbd, None);
         assert_eq!((m.terpenes[0].name.as_str(), m.terpenes[0].pct), ("E-Caryophyllene", Some(1.1)));
@@ -4879,6 +5006,29 @@ mod tests {
         assert!(slugify_handle("").starts_with("coa-"));
         assert!(slugify_handle("---").starts_with("coa-"));
         assert_eq!(slugify_handle(&"x".repeat(100)).len(), 80);
+    }
+
+    #[test]
+    fn potency_metafields_match_the_product_definitions() {
+        assert_eq!([0.0, 19.99, 20.0, 24.9, 25.0, 30.0, 41.2].map(thca_range), ["Under 20%", "Under 20%", "20-25%", "20-25%", "25-30%", "30%+", "30%+"]);
+        let f = ImportFields { thca_percent: Some(24.5678), cbd_percent: Some(120.0), cbg_percent: None, ..Default::default() };
+        let t = |id: &str, pct: Option<f64>| serde_json::json!({ "terpene_id": id, "pct": pct });
+        let profile = [t("a", Some(0.2)), t("b", None), t("c", Some(1.4)), t("c", Some(1.4)), t("d", Some(0.9)), t("e", Some(0.1))];
+        let (m, clear) = potency_metafields("gid://shopify/Product/1", &f, &profile);
+        assert!(clear.is_empty());
+        let got: Vec<(String, String)> = m.iter().map(|m| (m["key"].as_str().unwrap().into(), m["value"].as_str().unwrap().into())).collect();
+        let want = [("total_thca", "24.57"), ("thca_range", "20-25%"), ("top_terpenes", r#"["c","d","a"]"#)];
+        assert_eq!(got, want.map(|(k, v)| (k.to_string(), v.to_string())), "cbd > 100 and missing cbg are left alone");
+        assert!(m.iter().all(|m| m["ownerId"] == "gid://shopify/Product/1" && m["namespace"] == "custom"));
+        assert_eq!(m[2]["type"], "list.metaobject_reference");
+        // Not detected (no %) never makes the top list.
+        assert!(potency_metafields("p", &ImportFields::default(), &[t("x", None), t("y", Some(0.0))]).0.is_empty());
+        let f3 = ImportFields { thca_percent: Some(0.64), cbd_percent: Some(24.508), cbg_percent: Some(0.996), ..Default::default() };
+        let (m3, clear3) = potency_metafields("p", &f3, &[]);
+        let vals: Vec<_> = m3.iter().map(|m| (m["key"].as_str().unwrap(), m["value"].as_str().unwrap())).collect();
+        assert_eq!(vals, [("total_cbd", "24.51"), ("total_cbg", "1"), ("thca_range", "Under 20%")], "hundredths; 0.996 rounds up to 1");
+        assert_eq!(clear3, ["total_thca"], "under 1.00 shows blank");
+        assert_eq!([1.255, 0.387, 0.4, 19.881, 0.0].map(round2), [1.26, 0.39, 0.4, 19.88, 0.0], "half-up despite binary 1.25499…");
     }
 
     #[test]

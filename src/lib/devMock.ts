@@ -584,7 +584,8 @@ function importCoa(a: Record<string, unknown>) {
   const step = (step: ImportStep["step"], error: string | null = null, critical = false, detail: unknown = null): ImportStep => ({ step, ok: !error, critical, error, detail });
   const product = catProducts.find((p) => p.id === req.productId) ?? null;
   const steps = [step("terpenes"), step("metaobject", null, true)];
-  if (req.productId) steps.push(step("productLink", null, false, { linked: req.productId, totalRecords: 1, flowerType: "Type 1 (THCa)", category: product?.productType ?? null }));
+  if (req.productId) steps.push(step("productLink", null, false, { linked: req.productId, totalRecords: 1, flowerType: "Type 1 (THCa)", category: product?.productType ?? null }),
+    step("potency", null, false, !req.post ? { skipped: "not posting — product page left alone" } : f.thcaPercent == null ? { skipped: "no potency values on this COA" } : { total_thca: String(f.thcaPercent) }));
   if (req.post) steps.push(step("coaPage", req.fileUrl ? null : "no fileUrl yet — file may still be propagating"));
   steps.push(step("cacheFields"));
   const posted = req.post && !!req.fileUrl;

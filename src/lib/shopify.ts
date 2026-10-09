@@ -663,7 +663,7 @@ export interface ImportRequest {
   /** true → coa_record ACTIVE + /pages/coa block; false → DRAFT record, no theme write. */
   post: boolean;
 }
-export type ImportStepName = "terpenes" | "metaobject" | "productLink" | "coaPage" | "cacheFields";
+export type ImportStepName = "terpenes" | "metaobject" | "productLink" | "potency" | "coaPage" | "cacheFields";
 export interface ImportStep { step: ImportStepName; ok: boolean; critical: boolean; error: string | null; detail: unknown }
 export interface ImportResult { ok: boolean; steps: ImportStep[]; metaobject: { id: string; handle: string } | null; unknownTerpenes: string[]; posted: boolean }
 export interface RepostResult {
@@ -710,12 +710,13 @@ export const googleStatus = (cfg: GoogleConfig) => invoke<GoogleStatus>("google_
 /** Uploads the PDF as `pdfName` into the folder (same-name dedupe) and upserts the Sheet row by batch; each leg reports ok / skipped / error. */
 export const googleMirrorCoa = (cfg: GoogleConfig, req: { fileUrl: string | null; pdfName: string; row: MirrorRow }) => invoke<MirrorResult>("google_mirror_coa", { cfg, req });
 /** 27.0891 → "27.089", 18.1 → "18.1", null stays null. */
-export const dec3 = (n: number | null | undefined) => (n == null ? null : String(Math.round(n * 1000) / 1000));
+// toFixed(9) first so 1.255 (stored as 1.25499…) rounds half-up to 1.26, matching round2 in lib.rs.
+export const dec2 = (n: number | null | undefined) => (n == null ? null : String(Math.round(Number((n * 100).toFixed(9))) / 100));
 /** Sheet row for a library COA; `extra` carries the linked product's canonical flowerType / category from an import result. */
 // ponytail: without `extra` flowerType is the raw product metafield (Coa.type), not the canonical "Type 1 (THCa)" the import writes.
 export const mirrorRowFromCoa = (c: Coa, extra: { flowerType?: string | null; category?: string | null; posted?: boolean } = {}): MirrorRow => ({
   batch: c.batch, productName: c.productName || null, flowerType: extra.flowerType ?? c.type, category: extra.category ?? null, lab: c.lab, issued: c.issued || null, expires: c.expires || null,
-  thca: dec3(c.thca), cbd: dec3(c.cbd), cbg: dec3(c.cbg), totalCannabinoids: dec3(c.totalCannabinoids), shopifyUrl: c.fileUrl,
+  thca: dec2(c.thca), cbd: dec2(c.cbd), cbg: dec2(c.cbg), totalCannabinoids: dec2(c.totalCannabinoids), shopifyUrl: c.fileUrl,
   posted: (extra.posted ?? c.postedStatus === "posted") ? "Yes" : "No", importedAt: new Date().toISOString(), notes: c.notes,
 });
 /** Drive file name: the product name, else the cleaned file stem, + .pdf. */

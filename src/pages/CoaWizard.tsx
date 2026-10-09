@@ -6,14 +6,14 @@ import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { prefs, useApp } from "../lib/app";
 import {
-  type Coa, type ImportFields, type ImportResult, type Kind, type MirrorLeg, OPENROUTER_MODEL_PREF, TERPENE_LIST, dec3, fileToBase64, fmtDate, getOpenRouterStatus, googleConfig, googleConfigured,
+  type Coa, type ImportFields, type ImportResult, type Kind, type MirrorLeg, OPENROUTER_MODEL_PREF, TERPENE_LIST, dec2, fileToBase64, fmtDate, getOpenRouterStatus, googleConfig, googleConfigured,
   googleMirrorCoa, importCoa, loadCoas, parseCoas, pdfStem as stem, uploadCoaPdf,
 } from "../lib/shopify";
 import { Pill, Spinner } from "../components/ui";
 import { ProductSearch } from "./Lab";
 
 const STEPS = ["Upload", "Extract", "Map", "Import"] as const;
-const STEP_LABEL: Record<string, string> = { terpenes: "terpenes", metaobject: "coa_record", productLink: "product link", coaPage: "/pages/coa", cacheFields: "cache" };
+const STEP_LABEL: Record<string, string> = { terpenes: "terpenes", metaobject: "coa_record", productLink: "product link", potency: "potency", coaPage: "/pages/coa", cacheFields: "cache" };
 type Status = "queued" | "uploading" | "uploaded" | "failed" | "parsing" | "parsed" | "importing" | "imported" | "import-failed";
 const STATUS_KIND: Record<Status, Kind> = { queued: "neutral", uploading: "amber", uploaded: "green", failed: "red", parsing: "amber", parsed: "green", importing: "amber", imported: "green", "import-failed": "red" };
 const STATUS_LABEL: Partial<Record<Status, string>> = { uploaded: "in Shopify", "import-failed": "failed" };
@@ -155,7 +155,7 @@ export function CoaWizard({ mode, prefill = [], onClose, onDone }: { mode: "uplo
       try {
         patch(r.id, { mirror: await googleMirrorCoa(gCfg, { fileUrl: r.fileUrl ?? null, pdfName: `${name}.pdf`, row: {
           batch: fields.batchId ?? null, productName: name, flowerType: link?.flowerType ?? null, category: link?.category ?? null, lab: fields.lab ?? null, issued: fields.issueDate ?? null, expires: fields.expiryDate ?? null,
-          thca: dec3(fields.thcaPercent), cbd: dec3(fields.cbdPercent), cbg: dec3(fields.cbgPercent), totalCannabinoids: dec3(fields.totalCannabinoidsPercent), shopifyUrl: r.fileUrl ?? null,
+          thca: dec2(fields.thcaPercent), cbd: dec2(fields.cbdPercent), cbg: dec2(fields.cbgPercent), totalCannabinoids: dec2(fields.totalCannabinoidsPercent), shopifyUrl: r.fileUrl ?? null,
           posted: post ? "Yes" : "No", importedAt: new Date().toISOString(), notes: fields.notes ?? null,
         } }) });
       } catch (e) { const leg = { ok: false, skipped: null, error: String(e) }; patch(r.id, { mirror: { drive: leg, sheet: leg } }); }
@@ -175,7 +175,7 @@ export function CoaWizard({ mode, prefill = [], onClose, onDone }: { mode: "uplo
   );
   const chips = (r: Row): ReactNode => r.status === "importing" ? <Pill kind="amber" sm>importing…</Pill> : r.result ? (
     <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-      {r.result.steps.map((s) => <span key={s.step} className={`pill sm nodot ${s.ok ? "green" : "red"}`} title={s.error ?? STEP_LABEL[s.step] ?? s.step}>{s.ok ? "✓" : "✗"} {STEP_LABEL[s.step] ?? s.step}</span>)}
+      {r.result.steps.map((s) => <span key={s.step} className={`pill sm nodot ${s.ok ? "green" : "red"}`} title={s.error ?? (s.detail as { skipped?: string } | null)?.skipped ?? STEP_LABEL[s.step] ?? s.step}>{s.ok ? "✓" : "✗"} {STEP_LABEL[s.step] ?? s.step}</span>)}
       {r.result.unknownTerpenes.length > 0 && <span className="pill sm nodot amber" title="Not in the terpene library — left off the metaobject">unknown: {r.result.unknownTerpenes.join(", ")}</span>}
       {r.mirror ? [legChip("drive", r.mirror.drive), legChip("sheet", r.mirror.sheet)] : google && r.status === "imported" && <Pill kind="amber" sm>google…</Pill>}
     </span>
@@ -250,7 +250,7 @@ export function CoaWizard({ mode, prefill = [], onClose, onDone }: { mode: "uplo
           {text(r, "expiryDate", "Expires", { type: "date", mono: true, placeholder: "issued + 1 year" })}
           {text(r, "thcaPercent", "THCa %", { num: true })}
           {text(r, "cbdPercent", "CBDa %", { num: true })}
-          {text(r, "cbgPercent", "CBG %", { num: true })}
+          {text(r, "cbgPercent", "CBGa %", { num: true })}
           {text(r, "totalCannabinoidsPercent", "Total %", { num: true })}
           {text(r, "notes", "Notes", { span: 2 })}
           <label className="field" style={{ justifyContent: "flex-end" }}>QR present
